@@ -23,6 +23,8 @@ import {
   Printer,
   Save,
   UploadCloud,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 
 // ---------- Utilidades de fecha ----------
@@ -410,6 +412,25 @@ function calcularDiferenciaLiquidacion(liqActual, baseFilas) {
 
 function moneyFmt(n) {
   return (n || 0).toLocaleString("es-AR", { style: "currency", currency: "ARS", minimumFractionDigits: 2 });
+}
+
+// Le asigna un color consistente a cada valor de "estado" de trámite (son categorías
+// libres que carga cada usuario, así que no hay un significado fijo: solo buscamos
+// que cada una se distinga visualmente de las demás en el listado).
+const PALETA_ESTADOS = [
+  { bg: "#EAF3EF", color: "#2F6E5E" },
+  { bg: "#FBF3E4", color: "#B8862F" },
+  { bg: "#EFEDF5", color: "#6B5B95" },
+  { bg: "#E6EEF6", color: "#2F5E8A" },
+  { bg: "#F6E9E6", color: "#A6432D" },
+  { bg: "#F3E9E5", color: "#8A4B3B" },
+  { bg: "#EAF0E4", color: "#5A7A2E" },
+];
+function colorPorEstado(estado) {
+  if (!estado) return PALETA_ESTADOS[0];
+  let hash = 0;
+  for (let i = 0; i < estado.length; i++) hash = (hash * 31 + estado.charCodeAt(i)) >>> 0;
+  return PALETA_ESTADOS[hash % PALETA_ESTADOS.length];
 }
 
 // ---------- Vigencia en período ----------
@@ -921,9 +942,6 @@ function normalizeCatalogos(raw) {
 const emptyTramite = () => ({
   id: null,
   expediente: "",
-  cantidadPasantes: "",
-  carrera: "",
-  universidad: "",
   lugarTrabajo: "",
   habilitacionPagadora: "",
   jurisdiccion: "",
@@ -931,6 +949,7 @@ const emptyTramite = () => ({
   observaciones: "",
   cantidadMeses: "",
   fechaProbableInicio: "",
+  detalles: [{ id: uid(), carrera: "", universidad: "", cantidadPasantes: "" }],
 });
 
 function TramiteForm({ initial, onSave, onCancel, catalogos, onAddCatalogo }) {
@@ -949,6 +968,15 @@ function TramiteForm({ initial, onSave, onCancel, catalogos, onAddCatalogo }) {
   };
   const label = { fontSize: 12, fontWeight: 600, color: "#5B6158", marginBottom: 4, display: "block", textTransform: "uppercase", letterSpacing: "0.03em" };
 
+  const totalPasantes = (form.detalles || []).reduce((acc, d) => acc + (Number(d.cantidadPasantes) || 0), 0);
+
+  const updateDetalle = (id, key, value) =>
+    setForm((f) => ({ ...f, detalles: f.detalles.map((d) => (d.id === id ? { ...d, [key]: value } : d)) }));
+  const addDetalle = () =>
+    setForm((f) => ({ ...f, detalles: [...f.detalles, { id: uid(), carrera: "", universidad: "", cantidadPasantes: "" }] }));
+  const removeDetalle = (id) =>
+    setForm((f) => ({ ...f, detalles: f.detalles.length > 1 ? f.detalles.filter((d) => d.id !== id) : f.detalles }));
+
   const submit = () => {
     if (!form.expediente) return;
     onSave({ ...form, id: form.id || uid() });
@@ -962,31 +990,12 @@ function TramiteForm({ initial, onSave, onCancel, catalogos, onAddCatalogo }) {
           <input style={inputStyle} value={form.expediente} onChange={(e) => set("expediente", e.target.value)} />
         </div>
         <div>
-          <label style={label}>Cantidad de pasantes</label>
-          <input type="number" min="1" style={inputStyle} value={form.cantidadPasantes} onChange={(e) => set("cantidadPasantes", e.target.value)} />
-        </div>
-        <div>
           <label style={label}>Cantidad de meses a contratar</label>
           <input type="number" min="1" style={inputStyle} value={form.cantidadMeses} onChange={(e) => set("cantidadMeses", e.target.value)} />
         </div>
         <div>
           <label style={label}>Fecha probable de inicio</label>
           <input type="date" style={inputStyle} value={form.fechaProbableInicio} onChange={(e) => set("fechaProbableInicio", e.target.value)} />
-        </div>
-        <div>
-          <label style={label}>Carrera</label>
-          <select style={inputStyle} value={form.carrera} onChange={(e) => set("carrera", e.target.value)}>
-            <option value="">Seleccionar…</option>
-            {catalogos.carreras.map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
-          <AddToCatalog placeholder="Nueva carrera" onAdd={(v) => { onAddCatalogo("carreras", v); set("carrera", v); }} />
-        </div>
-        <div>
-          <label style={label}>Universidad / Instituto</label>
-          <select style={inputStyle} value={form.universidad} onChange={(e) => set("universidad", e.target.value)}>
-            <option value="">Seleccionar…</option>
-            {catalogos.universidades.map((u) => <option key={u.nombre} value={u.nombre}>{u.nombre}</option>)}
-          </select>
         </div>
         <div>
           <label style={label}>Lugar de trabajo</label>
@@ -1015,6 +1024,43 @@ function TramiteForm({ initial, onSave, onCancel, catalogos, onAddCatalogo }) {
           <AddToCatalog placeholder="Nuevo estado (ej: En revisión legal)" onAdd={(v) => { onAddCatalogo("estadosTramite", v); set("estado", v); }} />
         </div>
       </div>
+
+      <div style={{ padding: 14, background: "#F6F7F5", borderRadius: 8, border: "1px solid #E7E9E4" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#1B2A4A", fontFamily: "'IBM Plex Serif', serif" }}>Carreras / universidades solicitadas</div>
+          <div style={{ fontSize: 12.5, color: "#5B6158" }}>Total: <strong>{totalPasantes}</strong> pasante{totalPasantes !== 1 ? "s" : ""}</div>
+        </div>
+        {(form.detalles || []).map((d) => (
+          <div key={d.id} style={{ display: "grid", gridTemplateColumns: "1.4fr 1.4fr 100px auto", gap: 10, alignItems: "end", marginBottom: 8, padding: 10, background: "#fff", borderRadius: 6, border: "1px solid #E7E9E4" }}>
+            <div>
+              <label style={label}>Carrera</label>
+              <select style={inputStyle} value={d.carrera} onChange={(e) => updateDetalle(d.id, "carrera", e.target.value)}>
+                <option value="">Seleccionar…</option>
+                {catalogos.carreras.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+              <AddToCatalog placeholder="Nueva carrera" onAdd={(v) => { onAddCatalogo("carreras", v); updateDetalle(d.id, "carrera", v); }} />
+            </div>
+            <div>
+              <label style={label}>Universidad / Instituto</label>
+              <select style={inputStyle} value={d.universidad} onChange={(e) => updateDetalle(d.id, "universidad", e.target.value)}>
+                <option value="">Seleccionar…</option>
+                {catalogos.universidades.map((u) => <option key={u.nombre} value={u.nombre}>{u.nombre}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={label}>Cantidad</label>
+              <input type="number" min="1" style={inputStyle} value={d.cantidadPasantes} onChange={(e) => updateDetalle(d.id, "cantidadPasantes", e.target.value)} />
+            </div>
+            <button onClick={() => removeDetalle(d.id)} disabled={form.detalles.length === 1} style={{ background: "none", border: "none", color: form.detalles.length === 1 ? "#C7CDDB" : "#A6432D", cursor: form.detalles.length === 1 ? "not-allowed" : "pointer", padding: 8 }}>
+              <Trash2 size={16} />
+            </button>
+          </div>
+        ))}
+        <button type="button" onClick={addDetalle} style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: "none", color: "#6B5B95", cursor: "pointer", fontSize: 13, fontWeight: 600, padding: "4px 0" }}>
+          <Plus size={14} /> Agregar otra carrera / universidad
+        </button>
+      </div>
+
       <div>
         <label style={label}>Observaciones</label>
         <textarea style={{ ...inputStyle, minHeight: 70, resize: "vertical" }} value={form.observaciones} onChange={(e) => set("observaciones", e.target.value)} />
@@ -1401,52 +1447,94 @@ function getAsignacionParaPresupuesto(catalogos, year, month) {
 }
 
 function calcularPresupuestoTramite(t, catalogos) {
-  if (!t.fechaProbableInicio || !t.cantidadMeses || !t.cantidadPasantes) return null;
+  const renglones = (t.detalles || []).filter((d) => d.universidad && Number(d.cantidadPasantes) > 0);
+  if (!t.fechaProbableInicio || !t.cantidadMeses || renglones.length === 0) return null;
   const inicio = toDate(t.fechaProbableInicio);
   if (!inicio) return null;
   const year = inicio.getFullYear();
   const startMonth = inicio.getMonth();
+  const startDay = inicio.getDate();
   const mesesHastaFinAno = 12 - startMonth;
   const mesesACalcular = Math.min(Number(t.cantidadMeses), mesesHastaFinAno);
   if (mesesACalcular <= 0) return null;
-  const uni = (catalogos.universidades || []).find((u) => u.nombre === t.universidad);
-  const gastoPct = uni ? Number(uni.gastoAdmin) || 0 : 0;
-  const cantidadPasantes = Number(t.cantidadPasantes) || 0;
-  const detalle = [];
+
+  const cantidadPasantesTotal = renglones.reduce((acc, r) => acc + (Number(r.cantidadPasantes) || 0), 0);
+  const detalleMeses = [];
   let totalGeneral = 0;
   let faltanDatos = false;
+
   for (let i = 0; i < mesesACalcular; i++) {
     const month = startMonth + i;
     const asig = getAsignacionParaPresupuesto(catalogos, year, month);
     if (!asig) {
       faltanDatos = true;
-      detalle.push({ year, month, sinDato: true });
+      detalleMeses.push({ year, month, sinDato: true, porRenglon: [], totalMes: 0 });
       continue;
     }
-    const iapos = asig.monto * (IAPOS_PCT / 100);
-    const gastoAdmin = asig.monto * (gastoPct / 100);
-    const totalPorPasante = asig.monto + iapos + gastoAdmin;
-    const totalMes = totalPorPasante * cantidadPasantes;
+    let montoBase = asig.monto;
+    let esProrrateado = false;
+    let diasTrabajados = null;
+    if (i === 0 && startDay > 1) {
+      diasTrabajados = diasEnMes(year, month) - startDay + 1;
+      montoBase = (asig.monto / 30) * diasTrabajados;
+      esProrrateado = true;
+    }
+    const iaposBase = montoBase * (IAPOS_PCT / 100);
+
+    const porRenglon = renglones.map((r) => {
+      const uni = (catalogos.universidades || []).find((u) => u.nombre === r.universidad);
+      const gastoPct = uni ? Number(uni.gastoAdmin) || 0 : 0;
+      const gastoAdmin = montoBase * (gastoPct / 100);
+      const totalPorPasante = montoBase + iaposBase + gastoAdmin;
+      const cantidad = Number(r.cantidadPasantes) || 0;
+      return { carrera: r.carrera, universidad: r.universidad, cantidadPasantes: cantidad, gastoPct, gastoAdmin, totalPorPasante, subtotal: totalPorPasante * cantidad };
+    });
+    const totalMes = porRenglon.reduce((acc, r) => acc + r.subtotal, 0);
     totalGeneral += totalMes;
-    detalle.push({ year, month, monto: asig.monto, estimado: asig.estimado, iapos, gastoAdmin, totalPorPasante, totalMes });
+    detalleMeses.push({ year, month, estimado: asig.estimado, esProrrateado, diasTrabajados, montoBase, iaposBase, porRenglon, totalMes });
   }
-  return { meses: mesesACalcular, mesesHastaFinAno, detalle, totalGeneral, cantidadPasantes, gastoPct, faltanDatos };
+
+  return { meses: mesesACalcular, mesesHastaFinAno, detalleMeses, totalGeneral, cantidadPasantesTotal, faltanDatos, renglones };
 }
 
 function exportPresupuestoExcel(t, presupuesto) {
   const wb = XLSX.utils.book_new();
-  const filas = presupuesto.detalle.map((d) => ({
-    Mes: d.sinDato ? monthLabel(d.year, d.month) + " (sin valor cargado)" : monthLabel(d.year, d.month) + (d.estimado ? " (estimado)" : ""),
-    "Asignación estímulo": d.sinDato ? "" : Number(d.monto.toFixed(2)),
-    [`IAPOS (${IAPOS_PCT}%)`]: d.sinDato ? "" : Number(d.iapos.toFixed(2)),
-    "Gasto administrativo": d.sinDato ? "" : Number(d.gastoAdmin.toFixed(2)),
-    "Total por pasante": d.sinDato ? "" : Number(d.totalPorPasante.toFixed(2)),
-    "Cantidad de pasantes": presupuesto.cantidadPasantes,
+
+  // Hoja 1: detalle por mes y por renglón (carrera/universidad)
+  const filasDetalle = [];
+  presupuesto.detalleMeses.forEach((d) => {
+    if (d.sinDato) {
+      filasDetalle.push({ Mes: monthLabel(d.year, d.month) + " (sin valor cargado)" });
+      return;
+    }
+    d.porRenglon.forEach((r) => {
+      filasDetalle.push({
+        Mes: monthLabel(d.year, d.month) + (d.estimado ? " (estimado)" : "") + (d.esProrrateado ? ` — proporcional (${d.diasTrabajados} días)` : ""),
+        Carrera: r.carrera,
+        "Universidad/Instituto": r.universidad,
+        "Cantidad de pasantes": r.cantidadPasantes,
+        "Asignación estímulo (c/u)": Number(d.montoBase.toFixed(2)),
+        [`IAPOS (${IAPOS_PCT}%, c/u)`]: Number(d.iaposBase.toFixed(2)),
+        "% Gasto admin.": r.gastoPct,
+        "Gasto admin. (c/u)": Number(r.gastoAdmin.toFixed(2)),
+        "Total por pasante": Number(r.totalPorPasante.toFixed(2)),
+        "Subtotal renglón": Number(r.subtotal.toFixed(2)),
+      });
+    });
+  });
+  filasDetalle.push({ Mes: "TOTAL GENERAL", "Subtotal renglón": Number(presupuesto.totalGeneral.toFixed(2)) });
+  const wsDetalle = XLSX.utils.json_to_sheet(filasDetalle);
+  XLSX.utils.book_append_sheet(wb, wsDetalle, "Detalle por mes");
+
+  // Hoja 2: resumen por mes
+  const filasResumen = presupuesto.detalleMeses.map((d) => ({
+    Mes: monthLabel(d.year, d.month),
     "Total del mes": d.sinDato ? "" : Number(d.totalMes.toFixed(2)),
   }));
-  filas.push({ Mes: "TOTAL", "Total del mes": Number(presupuesto.totalGeneral.toFixed(2)) });
-  const ws = XLSX.utils.json_to_sheet(filas);
-  XLSX.utils.book_append_sheet(wb, ws, "Presupuesto");
+  filasResumen.push({ Mes: "TOTAL", "Total del mes": Number(presupuesto.totalGeneral.toFixed(2)) });
+  const wsResumen = XLSX.utils.json_to_sheet(filasResumen);
+  XLSX.utils.book_append_sheet(wb, wsResumen, "Resumen mensual");
+
   XLSX.writeFile(wb, `presupuesto_${t.expediente || "tramite"}.xlsx`);
 }
 
@@ -1530,6 +1618,8 @@ export default function App() {
   const [historialAbierto, setHistorialAbierto] = useState(null);
   const [presupuestoModal, setPresupuestoModal] = useState(null);
   const [notificaciones, setNotificaciones] = useState({});
+  const [pwdVisible, setPwdVisible] = useState({ pwdEdicion: false, pwdLiquidacion: false, pwdCatalogo: false });
+  const [tramiteSearch, setTramiteSearch] = useState("");
 
   useEffect(() => {
     (async () => {
@@ -2212,12 +2302,28 @@ export default function App() {
         )}
 
         {/* -------- TRÁMITES -------- */}
-        {tab === "tramites" && (
+        {tab === "tramites" && (() => {
+          const tramitesFiltrados = tramites.filter((t) => {
+            if (!tramiteSearch) return true;
+            const q = tramiteSearch.toLowerCase();
+            const camposRenglones = (t.detalles || []).flatMap((d) => [d.universidad, d.carrera]);
+            return [t.expediente, t.lugarTrabajo, t.jurisdiccion, ...camposRenglones].some((v) => (v || "").toLowerCase().includes(q));
+          });
+          return (
           <div>
-            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 16 }}>
+            <div style={{ display: "flex", gap: 10, marginBottom: 16, alignItems: "center" }}>
+              <div style={{ position: "relative", flex: 1 }}>
+                <Search size={15} color="#8A9088" style={{ position: "absolute", left: 12, top: 11 }} />
+                <input
+                  placeholder="Buscar por expediente, universidad, carrera, lugar de trabajo o jurisdicción…"
+                  value={tramiteSearch}
+                  onChange={(e) => setTramiteSearch(e.target.value)}
+                  style={{ width: "100%", padding: "9px 12px 9px 34px", borderRadius: 7, border: "1px solid #DADCD6", fontSize: 14, boxSizing: "border-box" }}
+                />
+              </div>
               <button
                 onClick={() => ejecutarProtegido("edicion", () => setTramiteModal({ mode: "new", data: null }))}
-                style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 16px", background: "#1B2A4A", color: "#fff", border: "none", borderRadius: 7, fontSize: 14, fontWeight: 600, cursor: "pointer" }}
+                style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 16px", background: "#1B2A4A", color: "#fff", border: "none", borderRadius: 7, fontSize: 14, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}
               >
                 <Plus size={16} /> Nuevo trámite
               </button>
@@ -2228,18 +2334,29 @@ export default function App() {
                 No hay contrataciones en trámite cargadas todavía.
               </div>
             )}
+            {tramites.length > 0 && tramitesFiltrados.length === 0 && (
+              <div style={{ background: "#fff", border: "1px dashed #DADCD6", borderRadius: 10, padding: 40, textAlign: "center", color: "#8A9088" }}>
+                No hay resultados para esa búsqueda.
+              </div>
+            )}
 
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {tramites.map((t) => (
+              {tramitesFiltrados.map((t) => (
                 <div key={t.id} style={{ background: "#fff", border: "1px solid #E7E9E4", borderRadius: 10, padding: "14px 16px" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                     <div>
                       <div style={{ fontWeight: 700, fontSize: 15, fontFamily: "'IBM Plex Serif', serif" }}>
-                        Expediente {t.expediente} · {t.cantidadPasantes || "—"} pasante{Number(t.cantidadPasantes) !== 1 ? "s" : ""}
+                        Expediente {t.expediente} · {(t.detalles || []).reduce((acc, d) => acc + (Number(d.cantidadPasantes) || 0), 0)} pasante{(t.detalles || []).reduce((acc, d) => acc + (Number(d.cantidadPasantes) || 0), 0) !== 1 ? "s" : ""} en total
                       </div>
-                      <div style={{ display: "flex", gap: 14, marginTop: 4, fontSize: 12.5, color: "#5B6158", flexWrap: "wrap" }}>
-                        {t.carrera && <span style={{ display: "flex", alignItems: "center", gap: 4 }}><GraduationCap size={12} />{t.carrera}</span>}
-                        {t.universidad && <span style={{ display: "flex", alignItems: "center", gap: 4 }}><Building2 size={12} />{t.universidad}</span>}
+                      <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 6 }}>
+                        {(t.detalles || []).filter((d) => d.universidad || d.carrera).map((d) => (
+                          <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "#5B6158" }}>
+                            <GraduationCap size={12} />
+                            <span>{d.cantidadPasantes || "—"} × {d.carrera || "(sin carrera)"} — {d.universidad || "(sin universidad)"}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <div style={{ display: "flex", gap: 14, marginTop: 6, fontSize: 12.5, color: "#5B6158", flexWrap: "wrap" }}>
                         {t.lugarTrabajo && <span style={{ display: "flex", alignItems: "center", gap: 4 }}><MapPin size={12} />{t.lugarTrabajo}</span>}
                         {t.habilitacionPagadora && <span>{t.habilitacionPagadora}</span>}
                         {t.jurisdiccion && <span>{t.jurisdiccion}</span>}
@@ -2257,7 +2374,7 @@ export default function App() {
                         return (
                           <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 10 }}>
                             <span style={{ fontSize: 13, fontWeight: 700, color: "#1B2A4A" }}>
-                              Presupuesto estimado {presupuesto.detalle[0]?.year}: {moneyFmt(presupuesto.totalGeneral)}
+                              Presupuesto estimado {presupuesto.detalleMeses[0]?.year}: {moneyFmt(presupuesto.totalGeneral)}
                             </span>
                             {presupuesto.faltanDatos && (
                               <span style={{ fontSize: 11, color: "#B8862F" }}>(faltan valores de asignación para algún mes)</span>
@@ -2271,7 +2388,7 @@ export default function App() {
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       {t.estado && (
-                        <span style={{ padding: "3px 10px", borderRadius: 20, fontSize: 12, fontWeight: 600, color: "#1B2A4A", background: "#EAF3EF" }}>{t.estado}</span>
+                        <span style={{ padding: "3px 10px", borderRadius: 20, fontSize: 12, fontWeight: 600, color: colorPorEstado(t.estado).color, background: colorPorEstado(t.estado).bg }}>{t.estado}</span>
                       )}
                       <button onClick={() => ejecutarProtegido("edicion", () => setTramiteModal({ mode: "edit", data: t }))} style={{ background: "none", border: "none", cursor: "pointer", color: "#5B6158", padding: 4 }}>
                         <Edit2 size={15} />
@@ -2285,7 +2402,8 @@ export default function App() {
               ))}
             </div>
           </div>
-        )}
+          );
+        })()}
 
         {/* -------- LIQUIDACIÓN -------- */}
         {tab === "liquidacion" && (
@@ -2618,13 +2736,24 @@ export default function App() {
                 ].map(([key, label]) => (
                   <div key={key}>
                     <label style={{ fontSize: 11.5, fontWeight: 600, color: "#5B6158", marginBottom: 4, display: "block" }}>{label}</label>
-                    <input
-                      type="text"
-                      value={catalogos.seguridad?.[key] || ""}
-                      onChange={(e) => setCatalogos((c) => ({ ...c, seguridad: { ...c.seguridad, [key]: e.target.value } }))}
-                      placeholder="Sin contraseña"
-                      style={{ width: "100%", padding: "7px 9px", borderRadius: 6, border: "1px solid #DADCD6", fontSize: 13, boxSizing: "border-box" }}
-                    />
+                    <div style={{ position: "relative" }}>
+                      <input
+                        type={pwdVisible[key] ? "text" : "password"}
+                        value={catalogos.seguridad?.[key] || ""}
+                        onChange={(e) => setCatalogos((c) => ({ ...c, seguridad: { ...c.seguridad, [key]: e.target.value } }))}
+                        placeholder="Sin contraseña"
+                        autoComplete="new-password"
+                        style={{ width: "100%", padding: "7px 32px 7px 9px", borderRadius: 6, border: "1px solid #DADCD6", fontSize: 13, boxSizing: "border-box" }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setPwdVisible((v) => ({ ...v, [key]: !v[key] }))}
+                        title={pwdVisible[key] ? "Ocultar" : "Mostrar"}
+                        style={{ position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "#8A9088", padding: 4, display: "flex" }}
+                      >
+                        {pwdVisible[key] ? <EyeOff size={15} /> : <Eye size={15} />}
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -2900,38 +3029,48 @@ export default function App() {
                 </button>
               </div>
               <div style={{ fontSize: 12.5, color: "#5B6158", marginBottom: 16 }}>
-                Expediente {presupuestoModal.expediente} · {presupuesto.cantidadPasantes} pasante{presupuesto.cantidadPasantes !== 1 ? "s" : ""} · desde {fmt(presupuestoModal.fechaProbableInicio)} hasta el 31/12/{presupuesto.detalle[0]?.year}
+                Expediente {presupuestoModal.expediente} · {presupuesto.cantidadPasantesTotal} pasante{presupuesto.cantidadPasantesTotal !== 1 ? "s" : ""} en total · desde {fmt(presupuestoModal.fechaProbableInicio)} hasta el 31/12/{presupuesto.detalleMeses[0]?.year}
               </div>
-              <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 14 }}>
-                <thead>
-                  <tr>
-                    <th style={th}>Mes</th>
-                    <th style={th}>Asignación</th>
-                    <th style={th}>IAPOS</th>
-                    <th style={th}>Gasto adm.</th>
-                    <th style={th}>Total x pasante</th>
-                    <th style={th}>Total del mes</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {presupuesto.detalle.map((d) => (
-                    <tr key={`${d.year}-${d.month}`}>
-                      <td style={td}>{monthLabel(d.year, d.month)}{d.sinDato ? " — sin valor cargado" : d.estimado ? " (estimado)" : ""}</td>
-                      {d.sinDato ? (
-                        <td style={td} colSpan={5}>—</td>
-                      ) : (
-                        <>
-                          <td style={td}>{moneyFmt(d.monto)}</td>
-                          <td style={td}>{moneyFmt(d.iapos)}</td>
-                          <td style={td}>{moneyFmt(d.gastoAdmin)}</td>
-                          <td style={td}>{moneyFmt(d.totalPorPasante)}</td>
-                          <td style={{ ...td, fontWeight: 700 }}>{moneyFmt(d.totalMes)}</td>
-                        </>
-                      )}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              {presupuesto.detalleMeses.map((d) => (
+                <div key={`${d.year}-${d.month}`} style={{ marginBottom: 16 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#1B2A4A", marginBottom: 6, textTransform: "capitalize" }}>
+                    {monthLabel(d.year, d.month)}
+                    {d.sinDato ? " — sin valor cargado" : d.estimado ? " (estimado)" : ""}
+                    {d.esProrrateado && !d.sinDato && <span style={{ fontSize: 11, color: "#B8862F", fontWeight: 600 }}> · Proporcional ({d.diasTrabajados} días)</span>}
+                  </div>
+                  {d.sinDato ? (
+                    <div style={{ fontSize: 12.5, color: "#A6432D" }}>No hay valor de asignación cargado para este mes.</div>
+                  ) : (
+                    <>
+                      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                        <thead>
+                          <tr>
+                            <th style={th}>Carrera</th>
+                            <th style={th}>Universidad</th>
+                            <th style={th}>Cant.</th>
+                            <th style={th}>% Adm.</th>
+                            <th style={th}>Total x pasante</th>
+                            <th style={th}>Subtotal</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {d.porRenglon.map((r, i) => (
+                            <tr key={i}>
+                              <td style={td}>{r.carrera || "—"}</td>
+                              <td style={td}>{r.universidad}</td>
+                              <td style={td}>{r.cantidadPasantes}</td>
+                              <td style={td}>{r.gastoPct}%</td>
+                              <td style={td}>{moneyFmt(r.totalPorPasante)}</td>
+                              <td style={{ ...td, fontWeight: 700 }}>{moneyFmt(r.subtotal)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      <div style={{ textAlign: "right", fontSize: 12.5, marginTop: 4, color: "#1B2A4A" }}>Total del mes: <strong>{moneyFmt(d.totalMes)}</strong></div>
+                    </>
+                  )}
+                </div>
+              ))}
               <div style={{ fontSize: 11.5, color: "#8A9088", marginBottom: 14 }}>
                 Los meses marcados "(estimado)" usan el último valor de asignación estímulo cargado en Catálogos, porque todavía no tenés el valor oficial de ese mes. Actualizá el cálculo cuando lo publiquen.
               </div>
