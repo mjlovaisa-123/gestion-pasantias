@@ -198,7 +198,7 @@ function filaLiquidacion(f, eeMap) {
     [`IAPOS (${IAPOS_PCT}%)`]: Number(f.iapos.toFixed(2)),
     "% Gasto admin.": f.gastoPct,
     "Gasto administrativo": Number(f.gastoAdmin.toFixed(2)),
-    Total: Number(f.total.toFixed(2)),
+    Total: Number(totalACargoHabilitacion(f).toFixed(2)),
     "N° EE": (eeMap && eeMap[f.p.dni]) || "",
     Observación: [f.centralizada ? "Gasto administrativo abonado por la habilitación centralizada" : "", f.motivoDiff || ""].filter(Boolean).join(" · "),
   };
@@ -311,6 +311,10 @@ function calcularFilaPasantia(p, year, month, valorAsignacion, catalogos) {
 // aplicando siempre la misma regla de pago: asignación+IAPOS los paga la habilitación pagadora;
 // el gasto administrativo también, salvo universidades centralizadas (lo paga la centralizada).
 function agruparFilas(filas) {
+  // Orden dentro de cada grupo: por universidad y, dentro de la misma universidad, alfabético por nombre.
+  const ordenarFilas = (arr) =>
+    arr.slice().sort((a, b) => (a.p.universidad || "").localeCompare(b.p.universidad || "") || (a.p.nombre || "").localeCompare(b.p.nombre || ""));
+
   const porHabMap = new Map();
   filas.forEach((f) => {
     const key = f.p.habilitacionPagadora || "(sin habilitación pagadora)";
@@ -321,7 +325,7 @@ function agruparFilas(filas) {
     if (!f.centralizada) g.gastoAdminTotal += f.gastoAdmin;
   });
   const porHabilitacion = Array.from(porHabMap.values())
-    .map((g) => ({ ...g, total: g.subtotalAsigIapos + g.gastoAdminTotal }))
+    .map((g) => ({ ...g, filas: ordenarFilas(g.filas), total: g.subtotalAsigIapos + g.gastoAdminTotal }))
     .sort((a, b) => a.habilitacion.localeCompare(b.habilitacion));
 
   const filasCentralizada = filas.filter((f) => f.centralizada);
@@ -333,7 +337,9 @@ function agruparFilas(filas) {
     g.filas.push(f);
     g.subtotal += f.gastoAdmin;
   });
-  const centralizada = Array.from(centralMap.values()).sort((a, b) => a.jurisdiccion.localeCompare(b.jurisdiccion));
+  const centralizada = Array.from(centralMap.values())
+    .map((g) => ({ ...g, filas: ordenarFilas(g.filas) }))
+    .sort((a, b) => a.jurisdiccion.localeCompare(b.jurisdiccion));
   const centralizadaTotal = filasCentralizada.reduce((acc, f) => acc + f.gastoAdmin, 0);
 
   return { filas, porHabilitacion, centralizada, centralizadaTotal };
@@ -431,6 +437,13 @@ function colorPorEstado(estado) {
   let hash = 0;
   for (let i = 0; i < estado.length; i++) hash = (hash * 31 + estado.charCodeAt(i)) >>> 0;
   return PALETA_ESTADOS[hash % PALETA_ESTADOS.length];
+}
+
+// Lo que efectivamente paga la habilitación pagadora por esta fila: si la universidad
+// es centralizada, el gasto administrativo lo abona la centralizada, así que no debe
+// sumarse acá (aunque f.total, usado para Excel/otros cálculos, sí lo incluye).
+function totalACargoHabilitacion(f) {
+  return f.centralizada ? f.monto + f.iapos : f.total;
 }
 
 // ---------- Vigencia en período ----------
@@ -1111,10 +1124,21 @@ function LiquidacionView({ liq, etiqueta, nombreCentralizada, onExport, onPrint,
     : liq.porHabilitacion
         .map((g) => {
           const filas = filtroJurisdiccion ? g.filas.filter((f) => f.p.jurisdiccion === filtroJurisdiccion) : g.filas;
-          return { ...g, filas };
+          if (!filtroJurisdiccion) return g;
+          // Recalcular subtotales solo con las filas visibles, para que no mezclen otras jurisdicciones.
+          const subtotalAsigIapos = filas.reduce((acc, f) => acc + f.monto + f.iapos, 0);
+          const gastoAdminTotal = filas.reduce((acc, f) => acc + (f.centralizada ? 0 : f.gastoAdmin), 0);
+          return { ...g, filas, subtotalAsigIapos, gastoAdminTotal, total: subtotalAsigIapos + gastoAdminTotal };
         })
         .filter((g) => g.filas.length > 0);
   const centralizadaVista = filtroJurisdiccion ? liq.centralizada.filter((g) => g.jurisdiccion === filtroJurisdiccion) : liq.centralizada;
+
+  // Total real de todo lo que cuesta la jurisdicción filtrada (incluye tanto lo que paga
+  // la habilitación pagadora como el gasto administrativo que paga la centralizada, ya
+  // que ambos son costo de esa jurisdicción, sin importar quién efectivamente lo abona).
+  const totalJurisdiccionFiltrada = filtroJurisdiccion
+    ? liq.filas.filter((f) => f.p.jurisdiccion === filtroJurisdiccion).reduce((acc, f) => acc + f.total, 0)
+    : null;
 
   const periodoLabel = (f) => (f.periodoTipo === "renovacion" ? "Renovación" : "Período inicial");
 
@@ -1149,6 +1173,11 @@ function LiquidacionView({ liq, etiqueta, nombreCentralizada, onExport, onPrint,
             <input type="checkbox" checked={soloCentralizada} onChange={(e) => setSoloCentralizada(e.target.checked)} />
             Solo habilitación centralizada
           </label>
+        )}
+        {filtroJurisdiccion && (
+          <span style={{ marginLeft: "auto", fontWeight: 700, color: "#1B2A4A" }}>
+            Total a liquidar en {filtroJurisdiccion}: {moneyFmt(totalJurisdiccionFiltrada)}
+          </span>
         )}
       </div>
 
@@ -1257,7 +1286,7 @@ function LiquidacionView({ liq, etiqueta, nombreCentralizada, onExport, onPrint,
                     <td style={td}>{moneyFmt(f.iapos)}</td>
                     <td style={td}>{f.gastoPct}%</td>
                     <td style={td}>{f.centralizada ? "—" : moneyFmt(f.gastoAdmin)}</td>
-                    <td style={{ ...td, fontWeight: 700 }}>{moneyFmt(f.total)}</td>
+                    <td style={{ ...td, fontWeight: 700 }}>{moneyFmt(totalACargoHabilitacion(f))}</td>
                     <td style={td}>{(eeMap && eeMap[f.p.dni]) || "—"}</td>
                   </tr>
                 ))}
@@ -1287,6 +1316,7 @@ function LiquidacionView({ liq, etiqueta, nombreCentralizada, onExport, onPrint,
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
                     <tr>
+                      {!readOnly && <th style={th}></th>}
                       <th style={th}>Pasante</th>
                       <th style={th}>Habilitación pagadora (original)</th>
                       <th style={th}>Lugar de trabajo</th>
@@ -1294,11 +1324,17 @@ function LiquidacionView({ liq, etiqueta, nombreCentralizada, onExport, onPrint,
                       <th style={th}>Vigencia</th>
                       <th style={th}>% Adm.</th>
                       <th style={th}>Gasto administrativo</th>
+                      <th style={th}>N° EE</th>
                     </tr>
                   </thead>
                   <tbody>
                     {g.filas.map((f) => (
                       <tr key={f.p.id}>
+                        {!readOnly && (
+                          <td style={td}>
+                            <input type="checkbox" checked={seleccionados.includes(f.p.dni)} onChange={() => toggleSel(f.p.dni)} />
+                          </td>
+                        )}
                         <td style={td}>{f.p.nombre}</td>
                         <td style={td}>{f.p.habilitacionPagadora}</td>
                         <td style={td}>{f.p.lugarTrabajo}</td>
@@ -1306,6 +1342,7 @@ function LiquidacionView({ liq, etiqueta, nombreCentralizada, onExport, onPrint,
                         <td style={td}>{fmt(f.vigenciaDesde)} – {fmt(f.vigenciaHasta)}</td>
                         <td style={td}>{f.gastoPct}%</td>
                         <td style={{ ...td, fontWeight: 700 }}>{moneyFmt(f.gastoAdmin)}</td>
+                        <td style={td}>{(eeMap && eeMap[f.p.dni]) || "—"}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1388,7 +1425,7 @@ function LiquidacionPrint({ liq, etiqueta, nombreCentralizada, eeMap, filtro, on
                   <td style={td}>{moneyFmt(f.monto)}</td>
                   <td style={td}>{moneyFmt(f.iapos)}</td>
                   <td style={td}>{f.centralizada ? "—" : moneyFmt(f.gastoAdmin)}</td>
-                  <td style={{ ...td, fontWeight: 700 }}>{moneyFmt(f.total)}</td>
+                  <td style={{ ...td, fontWeight: 700 }}>{moneyFmt(totalACargoHabilitacion(f))}</td>
                   <td style={td}>{(eeMap && eeMap[f.p.dni]) || ""}</td>
                 </tr>
               ))}
