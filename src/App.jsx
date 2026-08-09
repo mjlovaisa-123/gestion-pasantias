@@ -1100,7 +1100,8 @@ function LiquidacionView({ liq, etiqueta, nombreCentralizada, onExport, onPrint,
   const [filtroJurisdiccion, setFiltroJurisdiccion] = useState("");
   const [soloCentralizada, setSoloCentralizada] = useState(false);
 
-  const totalGeneral = liq.porHabilitacion.reduce((acc, g) => acc + g.total, 0);
+  const totalHabilitaciones = liq.porHabilitacion.reduce((acc, g) => acc + g.total, 0);
+  const totalGeneral = totalHabilitaciones + liq.centralizadaTotal;
   const jurisdiccionesDisponibles = Array.from(new Set(liq.filas.map((f) => f.p.jurisdiccion).filter(Boolean))).sort();
 
   const toggleSel = (dni) => setSeleccionados((s) => (s.includes(dni) ? s.filter((x) => x !== dni) : [...s, dni]));
@@ -1148,6 +1149,11 @@ function LiquidacionView({ liq, etiqueta, nombreCentralizada, onExport, onPrint,
         <div style={{ fontSize: 13, color: "#5B6158" }}>
           {liq.filas.length} pasantía{liq.filas.length !== 1 ? "s" : ""} liquidada{liq.filas.length !== 1 ? "s" : ""} · Total general{" "}
           <strong style={{ color: "#1B2A4A" }}>{moneyFmt(totalGeneral)}</strong>
+          {liq.centralizadaTotal > 0 && (
+            <span style={{ marginLeft: 8, color: "#8A9088" }}>
+              (habilitaciones pagadoras: {moneyFmt(totalHabilitaciones)} + centralizada: {moneyFmt(liq.centralizadaTotal)})
+            </span>
+          )}
           {confirmado && <span style={{ marginLeft: 10, padding: "2px 9px", borderRadius: 20, background: "#EAF3EF", color: "#2F6E5E", fontSize: 11.5, fontWeight: 600 }}>Confirmada el {fmt(fechaConfirmacion?.slice(0, 10))}</span>}
         </div>
         <div style={{ display: "flex", gap: 8 }}>
