@@ -1624,7 +1624,7 @@ const DEFAULT_CATALOGOS = {
 
 const IAPOS_PCT = 6;
 
-export default function App() {
+export default function App({ onLogout, userEmail } = {}) {
   const [pasantias, setPasantias] = useState([]);
   const [catalogos, setCatalogos] = useState(DEFAULT_CATALOGOS);
   const [loaded, setLoaded] = useState(false);
@@ -2014,6 +2014,16 @@ export default function App() {
                 <UploadCloud size={13} /> Restaurar
               </label>
               <input id="restore-backup-input" type="file" accept="application/json,.json" onChange={restaurarBackup} style={{ display: "none" }} />
+              {userEmail && <span style={{ fontSize: 11.5, color: "#C7CDDB", marginLeft: 4 }}>{userEmail}</span>}
+              {onLogout && (
+                <button
+                  onClick={onLogout}
+                  title="Cerrar sesión"
+                  style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", background: "rgba(255,255,255,0.1)", color: "#fff", border: "1px solid rgba(255,255,255,0.25)", borderRadius: 6, fontSize: 12.5, fontWeight: 600, cursor: "pointer" }}
+                >
+                  Cerrar sesión
+                </button>
+              )}
             </div>
           </div>
           <div style={{ display: "flex", gap: 4 }}>
