@@ -25,6 +25,7 @@ import {
   UploadCloud,
   Eye,
   EyeOff,
+  TrendingUp,
 } from "lucide-react";
 
 // ---------- Utilidades de fecha ----------
@@ -75,7 +76,7 @@ function getEstado(p, ref = new Date()) {
     // renuncia futura ya cargada: sigue vigente hasta esa fecha
   }
   if (restantes < 0) return "vencida";
-  if (restantes <= 45) return p.renovacion ? "por_vencer_final" : "por_vencer_renovacion";
+  if (restantes <= 60) return p.renovacion ? "por_vencer_final" : "por_vencer_renovacion";
   return "vigente";
 }
 const ESTADOS = {
@@ -145,6 +146,7 @@ const TIPO_LABEL = {
 function filaExport(p) {
   return {
     DNI: p.dni || "",
+    CUIL: p.cuil || "",
     Nombre: p.nombre || "",
     "Lugar de trabajo": p.lugarTrabajo || "",
     "Habilitación pagadora": p.habilitacionPagadora || "",
@@ -154,15 +156,17 @@ function filaExport(p) {
     Expediente: p.expediente || "",
     "1er período - desde": fmt(p.periodo1?.inicio),
     "1er período - hasta": fmt(p.periodo1?.fin),
-    "1er período - convenio": p.periodo1?.convenio || "",
+    "1er período - Acta N°": p.periodo1?.convenio || "",
+    "1er período - Resolución N°": p.periodo1?.resolucion || "",
     "Renovación - desde": p.renovacion?.inicio ? fmt(p.renovacion.inicio) : "",
     "Renovación - hasta": p.renovacion?.fin ? fmt(p.renovacion.fin) : "",
-    "Renovación - convenio": p.renovacion?.convenio || "",
+    "Renovación - Acta N°": p.renovacion?.convenio || "",
+    "Renovación - Resolución N°": p.renovacion?.resolucion || "",
     "Renuncia - fecha": p.renuncia?.fecha ? fmt(p.renuncia.fecha) : "",
     "Renuncia - nota": p.renuncia?.nota || "",
     "Renuncia - observaciones": p.renuncia?.observaciones || "",
     Suspensiones: (p.suspensiones || [])
-      .map((s) => `${fmt(s.inicio)} a ${fmt(s.fin)}${s.motivo ? " (" + s.motivo + ")" : ""}${s.convenio ? " · convenio " + s.convenio : ""}`)
+      .map((s) => `${fmt(s.inicio)} a ${fmt(s.fin)}${s.motivo ? " (" + s.motivo + ")" : ""}${s.convenio ? " · Acta " + s.convenio : ""}${s.resolucion ? " · Resolución " + s.resolucion : ""}`)
       .join(" | "),
     Estado: ESTADOS[p._estado || getEstado(p)]?.label || "",
     "Vencimiento efectivo": fmt((p._vencEfectiva || fechaVencimientoEfectiva(p)).toISOString().slice(0, 10)),
@@ -549,6 +553,7 @@ function Timeline({ p }) {
 const emptyForm = () => ({
   id: null,
   dni: "",
+  cuil: "",
   nombre: "",
   lugarTrabajo: "",
   habilitacionPagadora: "",
@@ -556,7 +561,7 @@ const emptyForm = () => ({
   universidad: "",
   carrera: "",
   expediente: "",
-  periodo1: { inicio: "", fin: "", convenio: "" },
+  periodo1: { inicio: "", fin: "", convenio: "", resolucion: "" },
   renovacion: null,
   renuncia: null,
   suspensiones: [],
@@ -621,7 +626,7 @@ function PasantiaForm({ initial, onSave, onCancel, catalogos, onAddCatalogo, dni
   };
 
   const addSuspension = () =>
-    setForm((f) => ({ ...f, suspensiones: [...(f.suspensiones || []), { id: uid(), inicio: "", fin: "", motivo: "", convenio: "" }] }));
+    setForm((f) => ({ ...f, suspensiones: [...(f.suspensiones || []), { id: uid(), inicio: "", fin: "", motivo: "", convenio: "", resolucion: "" }] }));
   const updateSuspension = (id, key, value) =>
     setForm((f) => ({ ...f, suspensiones: f.suspensiones.map((s) => (s.id === id ? { ...s, [key]: value } : s)) }));
   const removeSuspension = (id) => setForm((f) => ({ ...f, suspensiones: f.suspensiones.filter((s) => s.id !== id) }));
@@ -637,7 +642,7 @@ function PasantiaForm({ initial, onSave, onCancel, catalogos, onAddCatalogo, dni
   const submit = () => {
     if (!form.dni || !form.nombre || !form.periodo1.inicio || !form.periodo1.fin) return;
     const out = { ...form, id: form.dni };
-    out.renovacion = tieneRenovacion ? out.renovacion || { inicio: suggestRenovacionInicio(), fin: "", convenio: "" } : null;
+    out.renovacion = tieneRenovacion ? out.renovacion || { inicio: suggestRenovacionInicio(), fin: "", convenio: "", resolucion: "" } : null;
     out.renuncia = tieneRenuncia ? out.renuncia || { fecha: "", nota: "", observaciones: "" } : null;
     onSave(out);
   };
@@ -657,11 +662,15 @@ function PasantiaForm({ initial, onSave, onCancel, catalogos, onAddCatalogo, dni
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 4 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 4 }}>
         <div>
           <label style={label}>DNI (identificador único)</label>
           <input style={{ ...inputStyle, borderColor: dniError ? "#A6432D" : "#DADCD6" }} value={form.dni} onChange={(e) => set("dni", e.target.value.replace(/[^0-9]/g, ""))} placeholder="Sin puntos" />
           {dniError && <div style={{ fontSize: 11.5, color: "#A6432D", marginTop: 3 }}>{dniError}</div>}
+        </div>
+        <div>
+          <label style={label}>N° de CUIL</label>
+          <input style={inputStyle} value={form.cuil || ""} onChange={(e) => set("cuil", e.target.value.replace(/[^0-9-]/g, ""))} placeholder="Sin espacios" />
         </div>
         <div>
           <label style={label}>Nombre del pasante</label>
@@ -718,7 +727,7 @@ function PasantiaForm({ initial, onSave, onCancel, catalogos, onAddCatalogo, dni
 
       <div style={{ ...section, padding: 14, background: "#F6F7F5", borderRadius: 8, border: "1px solid #E7E9E4" }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: "#1B2A4A", marginBottom: 10, fontFamily: "'IBM Plex Serif', serif" }}>1er período — convenio original</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 14 }}>
           <div>
             <label style={label}>Desde</label>
             <input type="date" style={inputStyle} value={form.periodo1.inicio} onChange={(e) => set("periodo1.inicio", e.target.value)} />
@@ -728,8 +737,12 @@ function PasantiaForm({ initial, onSave, onCancel, catalogos, onAddCatalogo, dni
             <input type="date" style={inputStyle} value={form.periodo1.fin} onChange={(e) => set("periodo1.fin", e.target.value)} />
           </div>
           <div>
-            <label style={label}>N° de convenio</label>
+            <label style={label}>Acta N°</label>
             <input style={inputStyle} value={form.periodo1.convenio || ""} onChange={(e) => set("periodo1.convenio", e.target.value)} />
+          </div>
+          <div>
+            <label style={label}>N° de Resolución</label>
+            <input style={inputStyle} value={form.periodo1.resolucion || ""} onChange={(e) => set("periodo1.resolucion", e.target.value)} />
           </div>
         </div>
       </div>
@@ -741,14 +754,14 @@ function PasantiaForm({ initial, onSave, onCancel, catalogos, onAddCatalogo, dni
             checked={tieneRenovacion}
             onChange={(e) => {
               setTieneRenovacion(e.target.checked);
-              if (e.target.checked && !form.renovacion) set("renovacion", { inicio: suggestRenovacionInicio(), fin: "", convenio: "" });
+              if (e.target.checked && !form.renovacion) set("renovacion", { inicio: suggestRenovacionInicio(), fin: "", convenio: "", resolucion: "" });
               if (!e.target.checked) set("renovacion", null);
             }}
           />
           Tiene renovación
         </label>
         {tieneRenovacion && (
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginTop: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 14, marginTop: 10 }}>
             <div>
               <label style={label}>Desde</label>
               <input type="date" style={inputStyle} value={form.renovacion?.inicio || ""} onChange={(e) => set("renovacion.inicio", e.target.value)} />
@@ -758,8 +771,12 @@ function PasantiaForm({ initial, onSave, onCancel, catalogos, onAddCatalogo, dni
               <input type="date" style={inputStyle} value={form.renovacion?.fin || ""} onChange={(e) => set("renovacion.fin", e.target.value)} />
             </div>
             <div>
-              <label style={label}>N° de convenio</label>
+              <label style={label}>Acta N°</label>
               <input style={inputStyle} value={form.renovacion?.convenio || ""} onChange={(e) => set("renovacion.convenio", e.target.value)} />
+            </div>
+            <div>
+              <label style={label}>N° de Resolución</label>
+              <input style={inputStyle} value={form.renovacion?.resolucion || ""} onChange={(e) => set("renovacion.resolucion", e.target.value)} />
             </div>
           </div>
         )}
@@ -803,7 +820,7 @@ function PasantiaForm({ initial, onSave, onCancel, catalogos, onAddCatalogo, dni
           </div>
         )}
         {form.suspensiones.map((s) => (
-          <div key={s.id} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr auto", gap: 10, alignItems: "end", marginBottom: 8, padding: 10, background: "#fff", borderRadius: 6, border: "1px solid #E7E9E4" }}>
+          <div key={s.id} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr 1fr auto", gap: 10, alignItems: "end", marginBottom: 8, padding: 10, background: "#fff", borderRadius: 6, border: "1px solid #E7E9E4" }}>
             <div>
               <label style={label}>Desde</label>
               <input type="date" style={inputStyle} value={s.inicio} onChange={(e) => updateSuspension(s.id, "inicio", e.target.value)} />
@@ -817,8 +834,12 @@ function PasantiaForm({ initial, onSave, onCancel, catalogos, onAddCatalogo, dni
               <input style={inputStyle} value={s.motivo} onChange={(e) => updateSuspension(s.id, "motivo", e.target.value)} />
             </div>
             <div>
-              <label style={label}>N° de convenio (adenda)</label>
+              <label style={label}>Acta N° (adenda)</label>
               <input style={inputStyle} value={s.convenio || ""} onChange={(e) => updateSuspension(s.id, "convenio", e.target.value)} />
+            </div>
+            <div>
+              <label style={label}>N° de Resolución</label>
+              <input style={inputStyle} value={s.resolucion || ""} onChange={(e) => updateSuspension(s.id, "resolucion", e.target.value)} />
             </div>
             <button onClick={() => removeSuspension(s.id)} style={{ background: "none", border: "none", color: "#A6432D", cursor: "pointer", padding: 8 }}>
               <Trash2 size={16} />
@@ -992,6 +1013,98 @@ const emptyTramite = () => ({
   fechaProbableInicio: "",
   detalles: [{ id: uid(), carrera: "", universidad: "", cantidadPasantes: "" }],
 });
+
+function VerPasanteModal({ p, onClose }) {
+  const estado = getEstado(p);
+  const venc = fechaVencimientoEfectiva(p);
+  const row = (k, v) => (
+    <div style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: "1px solid #F0F1EE", fontSize: 13 }}>
+      <span style={{ color: "#5B6158" }}>{k}</span>
+      <span style={{ fontWeight: 600, textAlign: "right" }}>{v || "—"}</span>
+    </div>
+  );
+  const sectionTitle = (t) => (
+    <div style={{ fontSize: 12.5, fontWeight: 700, color: "#1B2A4A", marginTop: 16, marginBottom: 4, fontFamily: "'IBM Plex Serif', serif" }}>{t}</div>
+  );
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(27,42,74,0.35)", display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "40px 20px", overflowY: "auto", zIndex: 50 }}>
+      <div style={{ background: "#fff", borderRadius: 12, padding: 26, width: "100%", maxWidth: 560, boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <div style={{ fontFamily: "'IBM Plex Serif', serif", fontWeight: 700, fontSize: 18, color: "#1B2A4A" }}>{p.nombre}</div>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "#8A9088" }}>
+            <X size={20} />
+          </button>
+        </div>
+        <EstadoPillStatic estado={estado} />
+
+        {sectionTitle("Datos generales")}
+        {row("DNI", p.dni)}
+        {row("CUIL", p.cuil)}
+        {row("Lugar de trabajo", p.lugarTrabajo)}
+        {row("Habilitación pagadora", p.habilitacionPagadora)}
+        {row("Jurisdicción", p.jurisdiccion)}
+        {row("Universidad / Instituto", p.universidad)}
+        {row("Carrera", p.carrera)}
+        {row("Expediente TIMBO", p.expediente)}
+
+        {sectionTitle("1er período")}
+        {row("Desde", fmt(p.periodo1?.inicio))}
+        {row("Hasta", fmt(p.periodo1?.fin))}
+        {row("Acta N°", p.periodo1?.convenio)}
+        {row("Resolución N°", p.periodo1?.resolucion)}
+
+        {p.renovacion && (
+          <>
+            {sectionTitle("Renovación")}
+            {row("Desde", fmt(p.renovacion.inicio))}
+            {row("Hasta", fmt(p.renovacion.fin))}
+            {row("Acta N°", p.renovacion.convenio)}
+            {row("Resolución N°", p.renovacion.resolucion)}
+          </>
+        )}
+
+        {p.suspensiones?.length > 0 && (
+          <>
+            {sectionTitle("Suspensiones de plazo")}
+            {p.suspensiones.map((s, i) => (
+              <div key={i} style={{ fontSize: 12.5, padding: "6px 0", borderBottom: "1px solid #F0F1EE" }}>
+                {fmt(s.inicio)} – {fmt(s.fin)}{s.motivo ? ` · ${s.motivo}` : ""}{s.convenio ? ` · Acta ${s.convenio}` : ""}{s.resolucion ? ` · Resolución ${s.resolucion}` : ""}
+              </div>
+            ))}
+          </>
+        )}
+
+        {p.renuncia && (
+          <>
+            {sectionTitle("Renuncia")}
+            {row("Fecha", fmt(p.renuncia.fecha))}
+            {row("Nota", p.renuncia.nota)}
+            {row("Observaciones", p.renuncia.observaciones)}
+          </>
+        )}
+
+        {sectionTitle("Vencimiento")}
+        {row("Fecha de vencimiento efectiva", fmt(venc.toISOString().slice(0, 10)))}
+
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 20 }}>
+          <button onClick={onClose} style={{ padding: "9px 16px", borderRadius: 6, border: "1px solid #DADCD6", background: "#fff", color: "#5B6158", fontSize: 13.5, cursor: "pointer", fontWeight: 600 }}>
+            Cerrar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EstadoPillStatic({ estado }) {
+  const e = ESTADOS[estado];
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 9px", borderRadius: 20, fontSize: 12, fontWeight: 600, color: e.color, background: e.bg }}>
+      <span style={{ width: 6, height: 6, borderRadius: "50%", background: e.color }} />
+      {e.label}
+    </span>
+  );
+}
 
 function TramiteForm({ initial, onSave, onCancel, catalogos, onAddCatalogo }) {
   const [form, setForm] = useState(initial || emptyTramite());
@@ -1622,6 +1735,66 @@ function calcularPresupuestoTramite(t, catalogos) {
   return { meses: mesesACalcular, mesesHastaFinAno, detalleMeses, totalGeneral, cantidadPasantesTotal, faltanDatos, renglones };
 }
 
+// ---------- Proyección de gasto (todas las pasantías vigentes, para un rango de meses) ----------
+function calcularProyeccion(pasantias, catalogos, desdeYear, desdeMonth, hastaYear, hastaMonth) {
+  const meses = [];
+  let y = desdeYear;
+  let m = desdeMonth;
+  let guard = 0;
+  while ((y < hastaYear || (y === hastaYear && m <= hastaMonth)) && guard < 240) {
+    guard++;
+    const asig = getAsignacionParaPresupuesto(catalogos, y, m);
+    if (!asig) {
+      meses.push({ year: y, month: m, sinDato: true, total: 0, filas: [] });
+    } else {
+      const liq = calcularLiquidacion(pasantias, catalogos, y, m, asig.monto);
+      const total = liq.porHabilitacion.reduce((acc, g) => acc + g.total, 0) + liq.centralizadaTotal;
+      meses.push({ year: y, month: m, estimado: asig.estimado, total, filas: liq.filas });
+    }
+    m++;
+    if (m > 11) {
+      m = 0;
+      y++;
+    }
+  }
+  const totalGeneral = meses.reduce((acc, mm) => acc + mm.total, 0);
+  return { meses, totalGeneral };
+}
+
+function exportProyeccionExcel(proyeccion) {
+  const wb = XLSX.utils.book_new();
+
+  const filasResumen = proyeccion.meses.map((mm) => ({
+    Mes: monthLabel(mm.year, mm.month) + (mm.sinDato ? " (sin valor cargado)" : mm.estimado ? " (estimado)" : ""),
+    "Total del mes": mm.sinDato ? "" : Number(mm.total.toFixed(2)),
+  }));
+  filasResumen.push({ Mes: "TOTAL", "Total del mes": Number(proyeccion.totalGeneral.toFixed(2)) });
+  const wsResumen = XLSX.utils.json_to_sheet(filasResumen);
+  XLSX.utils.book_append_sheet(wb, wsResumen, "Resumen mensual");
+
+  const filasDetalle = [];
+  proyeccion.meses.forEach((mm) => {
+    mm.filas.forEach((f) => {
+      filasDetalle.push({
+        Mes: monthLabel(mm.year, mm.month),
+        DNI: f.p.dni,
+        Nombre: f.p.nombre,
+        "Habilitación pagadora": f.p.habilitacionPagadora,
+        Jurisdicción: f.p.jurisdiccion,
+        "Universidad/Instituto": f.p.universidad,
+        "Asignación estímulo": Number(f.monto.toFixed(2)),
+        [`IAPOS (${IAPOS_PCT}%)`]: Number(f.iapos.toFixed(2)),
+        "Gasto administrativo": Number(f.gastoAdmin.toFixed(2)),
+        Total: Number(totalACargoHabilitacion(f).toFixed(2)),
+      });
+    });
+  });
+  const wsDetalle = XLSX.utils.json_to_sheet(filasDetalle);
+  XLSX.utils.book_append_sheet(wb, wsDetalle, "Detalle por pasantía");
+
+  XLSX.writeFile(wb, `proyeccion_gasto_${proyeccion.meses[0]?.year}-${(proyeccion.meses[0]?.month ?? 0) + 1}_a_${proyeccion.meses[proyeccion.meses.length - 1]?.year}-${(proyeccion.meses[proyeccion.meses.length - 1]?.month ?? 0) + 1}.xlsx`);
+}
+
 function exportPresupuestoExcel(t, presupuesto) {
   const wb = XLSX.utils.book_new();
 
@@ -1712,6 +1885,11 @@ export default function App({ onLogout, userEmail } = {}) {
   const [loaded, setLoaded] = useState(false);
   const [tab, setTab] = useState("resumen");
   const [modal, setModal] = useState(null); // {mode:'new'|'edit', data}
+  const [verPasante, setVerPasante] = useState(null);
+  const [proyeccionModal, setProyeccionModal] = useState(false);
+  const [proyeccionDesde, setProyeccionDesde] = useState({ year: new Date().getFullYear(), month: new Date().getMonth() });
+  const [proyeccionHasta, setProyeccionHasta] = useState({ year: new Date().getFullYear(), month: Math.min(new Date().getMonth() + 5, 11) });
+  const [proyeccionResultado, setProyeccionResultado] = useState(null);
   const [dniError, setDniError] = useState("");
   const [search, setSearch] = useState("");
   const [filterEstado, setFilterEstado] = useState("");
@@ -2166,7 +2344,7 @@ export default function App({ onLogout, userEmail } = {}) {
               <div style={{ padding: "14px 18px", borderBottom: "1px solid #E7E9E4", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <AlertTriangle size={17} color="#B8862F" />
-                  <span style={{ fontFamily: "'IBM Plex Serif', serif", fontWeight: 600, fontSize: 15 }}>Alertas de vencimiento (próximos 45 días)</span>
+                  <span style={{ fontFamily: "'IBM Plex Serif', serif", fontWeight: 600, fontSize: 15 }}>Alertas de vencimiento (próximos 60 días)</span>
                 </div>
                 {alertasVisibles.some((p) => p._estado === "por_vencer_renovacion") && (
                   <button
@@ -2252,6 +2430,12 @@ export default function App({ onLogout, userEmail } = {}) {
                 ))}
               </select>
               <button
+                onClick={() => { setProyeccionResultado(null); setProyeccionModal(true); }}
+                style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 14px", background: "#fff", color: "#1B2A4A", border: "1px solid #DADCD6", borderRadius: 7, fontSize: 14, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}
+              >
+                <TrendingUp size={15} /> Proyección de gasto
+              </button>
+              <button
                 onClick={() =>
                   exportExcel({
                     detalle: filtered,
@@ -2292,7 +2476,10 @@ export default function App({ onLogout, userEmail } = {}) {
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <EstadoPill estado={p._estado} />
-                      <button onClick={() => ejecutarProtegido("edicion", () => setModal({ mode: "edit", data: p }))} style={{ background: "none", border: "none", cursor: "pointer", color: "#5B6158", padding: 4 }}>
+                      <button onClick={() => setVerPasante(p)} title="Ver ficha" style={{ background: "none", border: "none", cursor: "pointer", color: "#5B6158", padding: 4 }}>
+                        <Eye size={15} />
+                      </button>
+                      <button onClick={() => ejecutarProtegido("edicion", () => setModal({ mode: "edit", data: p }))} title="Editar" style={{ background: "none", border: "none", cursor: "pointer", color: "#5B6158", padding: 4 }}>
                         <Edit2 size={15} />
                       </button>
                       <button onClick={() => setConfirmDelete(p.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "#A6432D", padding: 4 }}>
@@ -2524,14 +2711,17 @@ export default function App({ onLogout, userEmail } = {}) {
                         </div>
                       )}
                       {(() => {
-                        const presupuesto = calcularPresupuestoTramite(t, catalogos);
+                        const presupuesto = t.presupuestoFijado || calcularPresupuestoTramite(t, catalogos);
                         if (!presupuesto) return null;
                         return (
                           <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 10 }}>
                             <span style={{ fontSize: 13, fontWeight: 700, color: "#1B2A4A" }}>
-                              Presupuesto estimado {presupuesto.detalleMeses[0]?.year}: {moneyFmt(presupuesto.totalGeneral)}
+                              Presupuesto {t.presupuestoFijado ? "fijado" : "estimado"} {presupuesto.detalleMeses[0]?.year}: {moneyFmt(presupuesto.totalGeneral)}
                             </span>
-                            {presupuesto.faltanDatos && (
+                            {t.presupuestoFijado && (
+                              <span style={{ fontSize: 10.5, padding: "2px 8px", borderRadius: 12, background: "#EAF3EF", color: "#2F6E5E", fontWeight: 600 }}>Fijado</span>
+                            )}
+                            {!t.presupuestoFijado && presupuesto.faltanDatos && (
                               <span style={{ fontSize: 11, color: "#B8862F" }}>(faltan valores de asignación para algún mes)</span>
                             )}
                             <button onClick={() => setPresupuestoModal(t)} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #DADCD6", background: "#fff", fontSize: 11.5, cursor: "pointer" }}>
@@ -3178,10 +3368,18 @@ export default function App({ onLogout, userEmail } = {}) {
       )}
 
       {presupuestoModal && (() => {
-        const presupuesto = calcularPresupuestoTramite(presupuestoModal, catalogos);
+        const presupuesto = presupuestoModal.presupuestoFijado || calcularPresupuestoTramite(presupuestoModal, catalogos);
         if (!presupuesto) return null;
+        const estaFijado = !!presupuestoModal.presupuestoFijado;
         const th = { textAlign: "left", padding: "7px 8px", fontSize: 11.5, fontWeight: 700, color: "#5B6158", textTransform: "uppercase", borderBottom: "2px solid #E7E9E4" };
         const td = { padding: "7px 8px", fontSize: 12.5, borderBottom: "1px solid #F0F1EE" };
+        const fijarPresupuesto = () => {
+          const nuevo = calcularPresupuestoTramite(presupuestoModal, catalogos);
+          if (!nuevo) return;
+          const fecha = new Date().toISOString();
+          setTramites((list) => list.map((t) => (t.id === presupuestoModal.id ? { ...t, presupuestoFijado: nuevo, presupuestoFijadoEl: fecha } : t)));
+          setPresupuestoModal((pm) => ({ ...pm, presupuestoFijado: nuevo, presupuestoFijadoEl: fecha }));
+        };
         return (
           <div style={{ position: "fixed", inset: 0, background: "rgba(27,42,74,0.35)", display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "40px 20px", overflowY: "auto", zIndex: 50 }}>
             <div style={{ background: "#fff", borderRadius: 12, padding: 26, width: "100%", maxWidth: 640, boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
@@ -3191,9 +3389,25 @@ export default function App({ onLogout, userEmail } = {}) {
                   <X size={20} />
                 </button>
               </div>
-              <div style={{ fontSize: 12.5, color: "#5B6158", marginBottom: 16 }}>
+              <div style={{ fontSize: 12.5, color: "#5B6158", marginBottom: 8 }}>
                 Expediente {presupuestoModal.expediente} · {presupuesto.cantidadPasantesTotal} pasante{presupuesto.cantidadPasantesTotal !== 1 ? "s" : ""} en total · desde {fmt(presupuestoModal.fechaProbableInicio)} hasta el 31/12/{presupuesto.detalleMeses[0]?.year}
               </div>
+              {estaFijado ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+                  <span style={{ padding: "3px 10px", borderRadius: 20, fontSize: 11.5, fontWeight: 600, color: "#2F6E5E", background: "#EAF3EF" }}>
+                    Fijado el {fmt(presupuestoModal.presupuestoFijadoEl?.slice(0, 10))}
+                  </span>
+                  <button onClick={fijarPresupuesto} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #DADCD6", background: "#fff", fontSize: 11.5, cursor: "pointer" }}>
+                    Recalcular y fijar de nuevo
+                  </button>
+                </div>
+              ) : (
+                <div style={{ marginBottom: 16 }}>
+                  <button onClick={fijarPresupuesto} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #B8862F", background: "#FBF3E4", color: "#8A6420", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                    Fijar este presupuesto (no se va a recalcular solo)
+                  </button>
+                </div>
+              )}
               {presupuesto.detalleMeses.map((d) => (
                 <div key={`${d.year}-${d.month}`} style={{ marginBottom: 16 }}>
                   <div style={{ fontSize: 13, fontWeight: 700, color: "#1B2A4A", marginBottom: 6, textTransform: "capitalize" }}>
@@ -3251,6 +3465,101 @@ export default function App({ onLogout, userEmail } = {}) {
         );
       })()}
 
+      {verPasante && <VerPasanteModal p={verPasante} onClose={() => setVerPasante(null)} />}
+
+      {proyeccionModal && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(27,42,74,0.35)", display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "40px 20px", overflowY: "auto", zIndex: 50 }}>
+          <div style={{ background: "#fff", borderRadius: 12, padding: 26, width: "100%", maxWidth: 680, boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <div style={{ fontFamily: "'IBM Plex Serif', serif", fontWeight: 700, fontSize: 18, color: "#1B2A4A" }}>Proyección de gasto</div>
+              <button onClick={() => setProyeccionModal(false)} style={{ background: "none", border: "none", cursor: "pointer", color: "#8A9088" }}>
+                <X size={20} />
+              </button>
+            </div>
+            <div style={{ fontSize: 12.5, color: "#8A9088", marginBottom: 16 }}>
+              Calcula, mes por mes, cuánto va a costar el conjunto de pasantías cargadas hoy (según sus fechas de vigencia), para el rango de meses que elijas.
+            </div>
+
+            <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 16 }}>
+              <div>
+                <label style={{ fontSize: 11.5, fontWeight: 600, color: "#5B6158", marginBottom: 4, display: "block" }}>Desde</label>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <select value={proyeccionDesde.month} onChange={(e) => setProyeccionDesde((d) => ({ ...d, month: Number(e.target.value) }))} style={{ padding: "8px 9px", borderRadius: 6, border: "1px solid #DADCD6", fontSize: 13 }}>
+                    {Array.from({ length: 12 }).map((_, i) => (
+                      <option key={i} value={i}>{new Date(2000, i, 1).toLocaleDateString("es-AR", { month: "long" })}</option>
+                    ))}
+                  </select>
+                  <select value={proyeccionDesde.year} onChange={(e) => setProyeccionDesde((d) => ({ ...d, year: Number(e.target.value) }))} style={{ padding: "8px 9px", borderRadius: 6, border: "1px solid #DADCD6", fontSize: 13 }}>
+                    {Array.from({ length: 7 }).map((_, i) => {
+                      const y = new Date().getFullYear() - 2 + i;
+                      return <option key={y} value={y}>{y}</option>;
+                    })}
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label style={{ fontSize: 11.5, fontWeight: 600, color: "#5B6158", marginBottom: 4, display: "block" }}>Hasta</label>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <select value={proyeccionHasta.month} onChange={(e) => setProyeccionHasta((d) => ({ ...d, month: Number(e.target.value) }))} style={{ padding: "8px 9px", borderRadius: 6, border: "1px solid #DADCD6", fontSize: 13 }}>
+                    {Array.from({ length: 12 }).map((_, i) => (
+                      <option key={i} value={i}>{new Date(2000, i, 1).toLocaleDateString("es-AR", { month: "long" })}</option>
+                    ))}
+                  </select>
+                  <select value={proyeccionHasta.year} onChange={(e) => setProyeccionHasta((d) => ({ ...d, year: Number(e.target.value) }))} style={{ padding: "8px 9px", borderRadius: 6, border: "1px solid #DADCD6", fontSize: 13 }}>
+                    {Array.from({ length: 7 }).map((_, i) => {
+                      const y = new Date().getFullYear() - 2 + i;
+                      return <option key={y} value={y}>{y}</option>;
+                    })}
+                  </select>
+                </div>
+              </div>
+              <button
+                onClick={() => setProyeccionResultado(calcularProyeccion(pasantias, catalogos, proyeccionDesde.year, proyeccionDesde.month, proyeccionHasta.year, proyeccionHasta.month))}
+                style={{ padding: "9px 16px", borderRadius: 7, border: "none", background: "#1B2A4A", color: "#fff", fontSize: 13.5, fontWeight: 600, cursor: "pointer" }}
+              >
+                Calcular
+              </button>
+            </div>
+
+            {proyeccionResultado && (
+              <div>
+                <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 14 }}>
+                  <thead>
+                    <tr>
+                      <th style={{ textAlign: "left", padding: "7px 8px", fontSize: 11.5, fontWeight: 700, color: "#5B6158", textTransform: "uppercase", borderBottom: "2px solid #E7E9E4" }}>Mes</th>
+                      <th style={{ textAlign: "left", padding: "7px 8px", fontSize: 11.5, fontWeight: 700, color: "#5B6158", textTransform: "uppercase", borderBottom: "2px solid #E7E9E4" }}>Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {proyeccionResultado.meses.map((mm) => (
+                      <tr key={`${mm.year}-${mm.month}`}>
+                        <td style={{ padding: "7px 8px", fontSize: 12.5, borderBottom: "1px solid #F0F1EE", textTransform: "capitalize" }}>
+                          {monthLabel(mm.year, mm.month)}
+                          {mm.sinDato && <span style={{ color: "#A6432D" }}> — sin valor cargado</span>}
+                          {mm.estimado && !mm.sinDato && <span style={{ color: "#B8862F" }}> (estimado)</span>}
+                        </td>
+                        <td style={{ padding: "7px 8px", fontSize: 12.5, borderBottom: "1px solid #F0F1EE", fontWeight: 700 }}>{mm.sinDato ? "—" : moneyFmt(mm.total)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <div style={{ fontSize: 11.5, color: "#8A9088", marginBottom: 14 }}>
+                  Los meses marcados "(estimado)" usan el último valor de asignación estímulo cargado en Catálogos, porque todavía no tenés el valor oficial de ese mes.
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: "#1B2A4A" }}>Total: {moneyFmt(proyeccionResultado.totalGeneral)}</div>
+                  <button
+                    onClick={() => exportProyeccionExcel(proyeccionResultado)}
+                    style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", background: "#1B2A4A", color: "#fff", border: "none", borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: "pointer" }}
+                  >
+                    <Download size={14} /> Excel
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       {printData && <AvisoPDF items={printData} onClose={() => setPrintData(null)} />}
       {passwordPrompt && (
         <PasswordModal
