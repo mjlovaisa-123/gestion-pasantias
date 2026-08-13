@@ -1953,6 +1953,17 @@ export default function App({ onLogout, userEmail } = {}) {
     [enriched]
   );
 
+  // Las de renovación ya notificadas se sacan de la vista (pero la marca de "notificada" queda guardada).
+  const alertasVisibles = useMemo(
+    () =>
+      alertas.filter((p) => {
+        if (p._estado !== "por_vencer_renovacion") return true;
+        const notifKey = `${p.id}-${p._vencEfectiva.toISOString().slice(0, 10)}`;
+        return !notificaciones[notifKey];
+      }),
+    [alertas, notificaciones]
+  );
+
   const filtered = useMemo(() => {
     return enriched.filter((p) => {
       const matchSearch =
@@ -2157,10 +2168,14 @@ export default function App({ onLogout, userEmail } = {}) {
                   <AlertTriangle size={17} color="#B8862F" />
                   <span style={{ fontFamily: "'IBM Plex Serif', serif", fontWeight: 600, fontSize: 15 }}>Alertas de vencimiento (próximos 45 días)</span>
                 </div>
-                {alertas.length > 0 && (
+                {alertasVisibles.some((p) => p._estado === "por_vencer_renovacion") && (
                   <button
                     onClick={() =>
-                      setPrintData(alertas.map((p) => ({ p, estado: p._estado, restantes: daysBetween(new Date(new Date().setHours(0, 0, 0, 0)), p._vencEfectiva) })))
+                      setPrintData(
+                        alertasVisibles
+                          .filter((p) => p._estado === "por_vencer_renovacion")
+                          .map((p) => ({ p, estado: p._estado, restantes: daysBetween(new Date(new Date().setHours(0, 0, 0, 0)), p._vencEfectiva) }))
+                      )
                     }
                     style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", background: "#1B2A4A", color: "#fff", border: "none", borderRadius: 6, fontSize: 12.5, fontWeight: 600, cursor: "pointer" }}
                   >
@@ -2168,20 +2183,21 @@ export default function App({ onLogout, userEmail } = {}) {
                   </button>
                 )}
               </div>
-              {alertas.length === 0 && (
+              {alertasVisibles.length === 0 && (
                 <div style={{ padding: 24, textAlign: "center", color: "#8A9088", fontSize: 14 }}>No hay pasantías próximas a vencer.</div>
               )}
-              {alertas.map((p) => {
+              {alertasVisibles.map((p) => {
                 const restantes = daysBetween(new Date(new Date().setHours(0, 0, 0, 0)), p._vencEfectiva);
                 const notifKey = `${p.id}-${p._vencEfectiva.toISOString().slice(0, 10)}`;
                 const notificada = !!notificaciones[notifKey];
+                const requiereAccion = p._estado === "por_vencer_renovacion";
                 return (
-                  <div key={p.id} style={{ padding: "12px 18px", borderBottom: "1px solid #F0F1EE", display: "flex", justifyContent: "space-between", alignItems: "center", opacity: notificada ? 0.55 : 1 }}>
+                  <div key={p.id} style={{ padding: "12px 18px", borderBottom: "1px solid #F0F1EE", display: "flex", justifyContent: "space-between", alignItems: "center", opacity: requiereAccion && notificada ? 0.55 : 1 }}>
                     <div onClick={() => ejecutarProtegido("edicion", () => setModal({ mode: "edit", data: p }))} style={{ cursor: "pointer" }}>
                       <div style={{ fontWeight: 600, fontSize: 14 }}>{p.nombre}</div>
                       <div style={{ fontSize: 12.5, color: "#8A9088", marginTop: 2 }}>
                         {p.universidad} · {p.jurisdiccion} ·{" "}
-                        {p._estado === "por_vencer_renovacion" ? "iniciar gestión de renovación" : "finalización definitiva"}
+                        {requiereAccion ? "iniciar gestión de renovación" : "finalización definitiva"}
                       </div>
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
@@ -2189,21 +2205,25 @@ export default function App({ onLogout, userEmail } = {}) {
                         <div style={{ fontSize: 13, fontWeight: 700, color: "#B8862F" }}>{restantes} días</div>
                         <div style={{ fontSize: 11.5, color: "#8A9088" }}>vence {fmt(p._vencEfectiva.toISOString().slice(0, 10))}</div>
                       </div>
-                      <button
-                        onClick={() => setPrintData([{ p, estado: p._estado, restantes }])}
-                        title="Generar aviso individual (PDF)"
-                        style={{ background: "none", border: "1px solid #DADCD6", borderRadius: 6, cursor: "pointer", color: "#1B2A4A", padding: 7 }}
-                      >
-                        <Printer size={14} />
-                      </button>
-                      <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, color: "#5B6158", cursor: "pointer" }}>
-                        <input
-                          type="checkbox"
-                          checked={notificada}
-                          onChange={(e) => setNotificaciones((n) => ({ ...n, [notifKey]: e.target.checked }))}
-                        />
-                        Notificada
-                      </label>
+                      {requiereAccion && (
+                        <>
+                          <button
+                            onClick={() => setPrintData([{ p, estado: p._estado, restantes }])}
+                            title="Generar aviso individual (PDF)"
+                            style={{ background: "none", border: "1px solid #DADCD6", borderRadius: 6, cursor: "pointer", color: "#1B2A4A", padding: 7 }}
+                          >
+                            <Printer size={14} />
+                          </button>
+                          <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, color: "#5B6158", cursor: "pointer" }}>
+                            <input
+                              type="checkbox"
+                              checked={notificada}
+                              onChange={(e) => setNotificaciones((n) => ({ ...n, [notifKey]: e.target.checked }))}
+                            />
+                            Notificada
+                          </label>
+                        </>
+                      )}
                     </div>
                   </div>
                 );
