@@ -1106,6 +1106,70 @@ function EstadoPillStatic({ estado }) {
   );
 }
 
+function VerTramiteModal({ t, onClose }) {
+  const row = (k, v) => (
+    <div style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: "1px solid #F0F1EE", fontSize: 13 }}>
+      <span style={{ color: "#5B6158" }}>{k}</span>
+      <span style={{ fontWeight: 600, textAlign: "right" }}>{v || "—"}</span>
+    </div>
+  );
+  const sectionTitle = (title) => (
+    <div style={{ fontSize: 12.5, fontWeight: 700, color: "#1B2A4A", marginTop: 16, marginBottom: 4, fontFamily: "'IBM Plex Serif', serif" }}>{title}</div>
+  );
+  const totalPasantes = (t.detalles || []).reduce((acc, d) => acc + (Number(d.cantidadPasantes) || 0), 0);
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(27,42,74,0.35)", display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "40px 20px", overflowY: "auto", zIndex: 50 }}>
+      <div style={{ background: "#fff", borderRadius: 12, padding: 26, width: "100%", maxWidth: 560, boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <div style={{ fontFamily: "'IBM Plex Serif', serif", fontWeight: 700, fontSize: 18, color: "#1B2A4A" }}>Expediente {t.expediente}</div>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "#8A9088" }}>
+            <X size={20} />
+          </button>
+        </div>
+        {t.estado && (
+          <span style={{ padding: "3px 10px", borderRadius: 20, fontSize: 12, fontWeight: 600, color: colorPorEstado(t.estado).color, background: colorPorEstado(t.estado).bg }}>{t.estado}</span>
+        )}
+
+        {sectionTitle("Datos generales")}
+        {row("Lugar de trabajo", t.lugarTrabajo)}
+        {row("Habilitación pagadora", t.habilitacionPagadora)}
+        {row("Jurisdicción", t.jurisdiccion)}
+        {row("Cantidad de meses a contratar", t.cantidadMeses)}
+        {row("Fecha probable de inicio", fmt(t.fechaProbableInicio))}
+        {row("Total de pasantes solicitados", totalPasantes)}
+
+        {sectionTitle("Carreras / universidades solicitadas")}
+        {(t.detalles || []).filter((d) => d.universidad || d.carrera).map((d, i) => (
+          <div key={i} style={{ fontSize: 12.5, padding: "6px 0", borderBottom: "1px solid #F0F1EE" }}>
+            {d.cantidadPasantes || "—"} × {d.carrera || "(sin carrera)"} — {d.universidad || "(sin universidad)"}
+          </div>
+        ))}
+
+        {t.observaciones && (
+          <>
+            {sectionTitle("Observaciones")}
+            <div style={{ fontSize: 13, color: "#20241F" }}>{t.observaciones}</div>
+          </>
+        )}
+
+        {t.presupuestoFijado && (
+          <>
+            {sectionTitle("Presupuesto")}
+            {row("Total fijado", moneyFmt(t.presupuestoFijado.totalGeneral))}
+            {row("Fijado el", fmt(t.presupuestoFijadoEl?.slice(0, 10)))}
+          </>
+        )}
+
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 20 }}>
+          <button onClick={onClose} style={{ padding: "9px 16px", borderRadius: 6, border: "1px solid #DADCD6", background: "#fff", color: "#5B6158", fontSize: 13.5, cursor: "pointer", fontWeight: 600 }}>
+            Cerrar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TramiteForm({ initial, onSave, onCancel, catalogos, onAddCatalogo }) {
   const [form, setForm] = useState(initial || emptyTramite());
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
@@ -1782,6 +1846,10 @@ function exportProyeccionExcel(proyeccion) {
         "Habilitación pagadora": f.p.habilitacionPagadora,
         Jurisdicción: f.p.jurisdiccion,
         "Universidad/Instituto": f.p.universidad,
+        Período: f.periodoTipo === "renovacion" ? "Renovación" : "Período inicial",
+        "Vigencia desde": fmt(f.vigenciaDesde),
+        "Vigencia hasta": fmt(f.vigenciaHasta),
+        "Días trabajados": f.dias,
         "Asignación estímulo": Number(f.monto.toFixed(2)),
         [`IAPOS (${IAPOS_PCT}%)`]: Number(f.iapos.toFixed(2)),
         "Gasto administrativo": Number(f.gastoAdmin.toFixed(2)),
@@ -1886,6 +1954,7 @@ export default function App({ onLogout, userEmail } = {}) {
   const [tab, setTab] = useState("resumen");
   const [modal, setModal] = useState(null); // {mode:'new'|'edit', data}
   const [verPasante, setVerPasante] = useState(null);
+  const [verTramite, setVerTramite] = useState(null);
   const [proyeccionModal, setProyeccionModal] = useState(false);
   const [proyeccionDesde, setProyeccionDesde] = useState({ year: new Date().getFullYear(), month: new Date().getMonth() });
   const [proyeccionHasta, setProyeccionHasta] = useState({ year: new Date().getFullYear(), month: Math.min(new Date().getMonth() + 5, 11) });
@@ -2735,7 +2804,10 @@ export default function App({ onLogout, userEmail } = {}) {
                       {t.estado && (
                         <span style={{ padding: "3px 10px", borderRadius: 20, fontSize: 12, fontWeight: 600, color: colorPorEstado(t.estado).color, background: colorPorEstado(t.estado).bg }}>{t.estado}</span>
                       )}
-                      <button onClick={() => ejecutarProtegido("edicion", () => setTramiteModal({ mode: "edit", data: t }))} style={{ background: "none", border: "none", cursor: "pointer", color: "#5B6158", padding: 4 }}>
+                      <button onClick={() => setVerTramite(t)} title="Ver ficha" style={{ background: "none", border: "none", cursor: "pointer", color: "#5B6158", padding: 4 }}>
+                        <Eye size={15} />
+                      </button>
+                      <button onClick={() => ejecutarProtegido("edicion", () => setTramiteModal({ mode: "edit", data: t }))} title="Editar" style={{ background: "none", border: "none", cursor: "pointer", color: "#5B6158", padding: 4 }}>
                         <Edit2 size={15} />
                       </button>
                       <button onClick={() => setConfirmDeleteTramite(t.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "#A6432D", padding: 4 }}>
@@ -3466,6 +3538,7 @@ export default function App({ onLogout, userEmail } = {}) {
       })()}
 
       {verPasante && <VerPasanteModal p={verPasante} onClose={() => setVerPasante(null)} />}
+      {verTramite && <VerTramiteModal t={verTramite} onClose={() => setVerTramite(null)} />}
 
       {proyeccionModal && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(27,42,74,0.35)", display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "40px 20px", overflowY: "auto", zIndex: 50 }}>
