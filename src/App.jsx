@@ -239,6 +239,34 @@ function exportLiquidacionExcel(liq, nombreArchivo, etiqueta, eeMap) {
     XLSX.utils.book_append_sheet(wb, wsCentral, "Centralizada (gasto admin.)");
   }
 
+  if (eeMap && Object.keys(eeMap).length) {
+    const porEEMap = new Map();
+    liq.filas.forEach((f) => {
+      const ee = eeMap[f.p.dni];
+      if (!ee) return;
+      if (!porEEMap.has(ee)) porEEMap.set(ee, { ee, cantidad: 0, monto: 0, iapos: 0, gastoAdmin: 0 });
+      const g = porEEMap.get(ee);
+      g.cantidad += 1;
+      g.monto += f.monto;
+      g.iapos += f.iapos;
+      g.gastoAdmin += f.gastoAdmin;
+    });
+    if (porEEMap.size) {
+      const filasEE = Array.from(porEEMap.values())
+        .sort((a, b) => a.ee.localeCompare(b.ee))
+        .map((g) => ({
+          "N° EE": g.ee,
+          Pasantías: g.cantidad,
+          "Asignación estímulo": Number(g.monto.toFixed(2)),
+          [`IAPOS (${IAPOS_PCT}%)`]: Number(g.iapos.toFixed(2)),
+          "Gasto administrativo": Number(g.gastoAdmin.toFixed(2)),
+          Total: Number((g.monto + g.iapos + g.gastoAdmin).toFixed(2)),
+        }));
+      const wsEE = XLSX.utils.json_to_sheet(filasEE);
+      XLSX.utils.book_append_sheet(wb, wsEE, "Totales por EE");
+    }
+  }
+
   XLSX.writeFile(wb, nombreArchivo);
 }
 
@@ -1104,6 +1132,26 @@ function LiquidacionView({ liq, etiqueta, nombreCentralizada, onExport, onPrint,
   const totalGeneral = totalHabilitaciones + liq.centralizadaTotal;
   const jurisdiccionesDisponibles = Array.from(new Set(liq.filas.map((f) => f.p.jurisdiccion).filter(Boolean))).sort();
 
+  // Totales por N° de EE: agrupa las pasantías que tengan un expediente asignado,
+  // y suma cada concepto (asignación, IAPOS, gasto administrativo, total).
+  const totalesPorEE = (() => {
+    if (!eeMap) return [];
+    const map = new Map();
+    liq.filas.forEach((f) => {
+      const ee = eeMap[f.p.dni];
+      if (!ee) return;
+      if (!map.has(ee)) map.set(ee, { ee, cantidad: 0, monto: 0, iapos: 0, gastoAdmin: 0 });
+      const g = map.get(ee);
+      g.cantidad += 1;
+      g.monto += f.monto;
+      g.iapos += f.iapos;
+      g.gastoAdmin += f.gastoAdmin;
+    });
+    return Array.from(map.values())
+      .map((g) => ({ ...g, total: g.monto + g.iapos + g.gastoAdmin }))
+      .sort((a, b) => a.ee.localeCompare(b.ee));
+  })();
+
   const toggleSel = (dni) => setSeleccionados((s) => (s.includes(dni) ? s.filter((x) => x !== dni) : [...s, dni]));
   const asignar = () => {
     if (!eeInput.trim() || seleccionados.length === 0) return;
@@ -1231,6 +1279,40 @@ function LiquidacionView({ liq, etiqueta, nombreCentralizada, onExport, onPrint,
               Limpiar selección
             </button>
           )}
+        </div>
+      )}
+
+      {totalesPorEE.length > 0 && (
+        <div style={{ background: "#fff", border: "1px solid #E7E9E4", borderRadius: 10, marginBottom: 16, overflow: "hidden" }}>
+          <div style={{ padding: "10px 16px", background: "#F6F7F5", borderBottom: "1px solid #E7E9E4", fontWeight: 700, fontSize: 13.5, color: "#1B2A4A" }}>
+            Totales por N° de EE
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr>
+                  <th style={th}>N° EE</th>
+                  <th style={th}>Pasantías</th>
+                  <th style={th}>Asignación</th>
+                  <th style={th}>IAPOS</th>
+                  <th style={th}>Gasto adm.</th>
+                  <th style={th}>Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {totalesPorEE.map((g) => (
+                  <tr key={g.ee}>
+                    <td style={td}>{g.ee}</td>
+                    <td style={td}>{g.cantidad}</td>
+                    <td style={td}>{moneyFmt(g.monto)}</td>
+                    <td style={td}>{moneyFmt(g.iapos)}</td>
+                    <td style={td}>{moneyFmt(g.gastoAdmin)}</td>
+                    <td style={{ ...td, fontWeight: 700 }}>{moneyFmt(g.total)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
@@ -2931,7 +3013,11 @@ export default function App({ onLogout, userEmail } = {}) {
                     return acc;
                   }, {})
                 )
-                  .sort((a, b) => b[0].localeCompare(a[0]))
+                  .sort((a, b) => {
+                    const va = a[1][0];
+                    const vb = b[1][0];
+                    return va.year * 12 + va.month - (vb.year * 12 + vb.month);
+                  })
                   .map(([key, items]) => {
                     const ordenados = items.slice().sort((a, b) => (b.creadoEl || "").localeCompare(a.creadoEl || ""));
                     return (
