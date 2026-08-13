@@ -1261,7 +1261,7 @@ function LiquidacionView({ liq, etiqueta, nombreCentralizada, onExport, onPrint,
         </div>
       )}
 
-      {!readOnly && (
+      {onAsignarEE && (
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, padding: "8px 12px", background: seleccionados.length ? "#EAF3EF" : "#F6F7F5", borderRadius: 8, fontSize: 12.5 }}>
           <span style={{ color: "#5B6158" }}>{seleccionados.length} seleccionado{seleccionados.length !== 1 ? "s" : ""}</span>
           <input
@@ -1331,7 +1331,7 @@ function LiquidacionView({ liq, etiqueta, nombreCentralizada, onExport, onPrint,
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr>
-                  {!readOnly && <th style={th}></th>}
+                  {onAsignarEE && <th style={th}></th>}
                   <th style={th}>Pasante</th>
                   <th style={th}>Universidad</th>
                   <th style={th}>Período</th>
@@ -1348,7 +1348,7 @@ function LiquidacionView({ liq, etiqueta, nombreCentralizada, onExport, onPrint,
               <tbody>
                 {g.filas.map((f) => (
                   <tr key={f.p.id} style={f.centralizada ? { background: "#FBF3E4" } : undefined}>
-                    {!readOnly && (
+                    {onAsignarEE && (
                       <td style={td}>
                         <input type="checkbox" checked={seleccionados.includes(f.p.dni)} onChange={() => toggleSel(f.p.dni)} />
                       </td>
@@ -1404,7 +1404,7 @@ function LiquidacionView({ liq, etiqueta, nombreCentralizada, onExport, onPrint,
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
                     <tr>
-                      {!readOnly && <th style={th}></th>}
+                      {onAsignarEE && <th style={th}></th>}
                       <th style={th}>Pasante</th>
                       <th style={th}>Habilitación pagadora (original)</th>
                       <th style={th}>Lugar de trabajo</th>
@@ -1418,7 +1418,7 @@ function LiquidacionView({ liq, etiqueta, nombreCentralizada, onExport, onPrint,
                   <tbody>
                     {g.filas.map((f) => (
                       <tr key={f.p.id}>
-                        {!readOnly && (
+                        {onAsignarEE && (
                           <td style={td}>
                             <input type="checkbox" checked={seleccionados.includes(f.p.dni)} onChange={() => toggleSel(f.p.dni)} />
                           </td>
@@ -2818,7 +2818,11 @@ export default function App({ onLogout, userEmail } = {}) {
                       etiqueta={`${historialAbierto.tipo === "mensual" ? "" : "Complementaria "}${monthLabel(historialAbierto.year, historialAbierto.month)}`}
                       nombreCentralizada={catalogos.centralizadaNombre}
                       eeMap={historialAbierto.eeMap}
-                      readOnly
+                      onAsignarEE={(dnis, valor) => {
+                        const nuevoEeMap = { ...(historialAbierto.eeMap || {}), ...Object.fromEntries(dnis.map((d) => [d, valor])) };
+                        setLiquidaciones((list) => list.map((r) => (r.id === historialAbierto.id ? { ...r, eeMap: nuevoEeMap } : r)));
+                        setHistorialAbierto((h) => ({ ...h, eeMap: nuevoEeMap }));
+                      }}
                       onExport={() =>
                         exportLiquidacionExcel(
                           historialAbierto.liq,
