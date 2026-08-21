@@ -154,12 +154,14 @@ function filaExport(p) {
     "Universidad/Instituto": p.universidad || "",
     Carrera: p.carrera || "",
     Expediente: p.expediente || "",
+    Observaciones: p.observaciones || "",
     "1er período - desde": fmt(p.periodo1?.inicio),
     "1er período - hasta": fmt(p.periodo1?.fin),
     "1er período - Acta N°": p.periodo1?.convenio || "",
     "1er período - Resolución N°": p.periodo1?.resolucion || "",
     "Renovación - desde": p.renovacion?.inicio ? fmt(p.renovacion.inicio) : "",
     "Renovación - hasta": p.renovacion?.fin ? fmt(p.renovacion.fin) : "",
+    "Renovación - N° de expediente": p.renovacion?.expediente || "",
     "Renovación - Acta N°": p.renovacion?.convenio || "",
     "Renovación - Resolución N°": p.renovacion?.resolucion || "",
     "Renuncia - fecha": p.renuncia?.fecha ? fmt(p.renuncia.fecha) : "",
@@ -248,26 +250,46 @@ function exportLiquidacionExcel(liq, nombreArchivo, etiqueta, eeMap) {
     liq.filas.forEach((f) => {
       const ee = eeMap[f.p.dni];
       if (!ee) return;
-      if (!porEEMap.has(ee)) porEEMap.set(ee, { ee, cantidad: 0, monto: 0, iapos: 0, gastoAdmin: 0 });
+      if (!porEEMap.has(ee)) porEEMap.set(ee, { ee, cantidad: 0, monto: 0, iapos: 0, gastoAdmin: 0, filas: [] });
       const g = porEEMap.get(ee);
       g.cantidad += 1;
       g.monto += f.monto;
       g.iapos += f.iapos;
       g.gastoAdmin += f.gastoAdmin;
+      g.filas.push(f);
     });
     if (porEEMap.size) {
-      const filasEE = Array.from(porEEMap.values())
-        .sort((a, b) => a.ee.localeCompare(b.ee))
-        .map((g) => ({
-          "N° EE": g.ee,
-          Pasantías: g.cantidad,
-          "Asignación estímulo": Number(g.monto.toFixed(2)),
-          [`IAPOS (${IAPOS_PCT}%)`]: Number(g.iapos.toFixed(2)),
-          "Gasto administrativo": Number(g.gastoAdmin.toFixed(2)),
-          Total: Number((g.monto + g.iapos + g.gastoAdmin).toFixed(2)),
-        }));
-      const wsEE = XLSX.utils.json_to_sheet(filasEE);
-      XLSX.utils.book_append_sheet(wb, wsEE, "Totales por EE");
+      const gruposEE = Array.from(porEEMap.values()).sort((a, b) => a.ee.localeCompare(b.ee));
+
+      const filasResumenEE = gruposEE.map((g) => ({
+        "N° EE": g.ee,
+        Pasantías: g.cantidad,
+        "Asignación estímulo": Number(g.monto.toFixed(2)),
+        [`IAPOS (${IAPOS_PCT}%)`]: Number(g.iapos.toFixed(2)),
+        "Aporte universidad/institución": Number(g.gastoAdmin.toFixed(2)),
+        Total: Number((g.monto + g.iapos + g.gastoAdmin).toFixed(2)),
+      }));
+      const wsResumenEE = XLSX.utils.json_to_sheet(filasResumenEE);
+      XLSX.utils.book_append_sheet(wb, wsResumenEE, "Resumen por EE");
+
+      const filasDetalleEE = [];
+      gruposEE.forEach((g) => {
+        g.filas.forEach((f) => {
+          filasDetalleEE.push({
+            "N° EE": g.ee,
+            DNI: f.p.dni,
+            Nombre: f.p.nombre,
+            "Universidad/Instituto": f.p.universidad,
+            "Habilitación pagadora": f.p.habilitacionPagadora,
+            "Asignación estímulo": Number(f.monto.toFixed(2)),
+            [`IAPOS (${IAPOS_PCT}%)`]: Number(f.iapos.toFixed(2)),
+            "Aporte universidad/institución": Number(f.gastoAdmin.toFixed(2)),
+            Total: Number(totalACargoHabilitacion(f).toFixed(2)),
+          });
+        });
+      });
+      const wsDetalleEE = XLSX.utils.json_to_sheet(filasDetalleEE);
+      XLSX.utils.book_append_sheet(wb, wsDetalleEE, "Detalle por EE");
     }
   }
 
@@ -561,6 +583,7 @@ const emptyForm = () => ({
   universidad: "",
   carrera: "",
   expediente: "",
+  observaciones: "",
   periodo1: { inicio: "", fin: "", convenio: "", resolucion: "" },
   renovacion: null,
   renuncia: null,
@@ -642,7 +665,7 @@ function PasantiaForm({ initial, onSave, onCancel, catalogos, onAddCatalogo, dni
   const submit = () => {
     if (!form.dni || !form.nombre || !form.periodo1.inicio || !form.periodo1.fin) return;
     const out = { ...form, id: form.dni };
-    out.renovacion = tieneRenovacion ? out.renovacion || { inicio: suggestRenovacionInicio(), fin: "", convenio: "", resolucion: "" } : null;
+    out.renovacion = tieneRenovacion ? out.renovacion || { inicio: suggestRenovacionInicio(), fin: "", convenio: "", resolucion: "", expediente: "" } : null;
     out.renuncia = tieneRenuncia ? out.renuncia || { fecha: "", nota: "", observaciones: "" } : null;
     onSave(out);
   };
@@ -725,6 +748,11 @@ function PasantiaForm({ initial, onSave, onCancel, catalogos, onAddCatalogo, dni
         </div>
       </div>
 
+      <div style={{ marginBottom: 22 }}>
+        <label style={label}>Observaciones</label>
+        <textarea style={{ ...inputStyle, minHeight: 60, resize: "vertical" }} value={form.observaciones || ""} onChange={(e) => set("observaciones", e.target.value)} />
+      </div>
+
       <div style={{ ...section, padding: 14, background: "#F6F7F5", borderRadius: 8, border: "1px solid #E7E9E4" }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: "#1B2A4A", marginBottom: 10, fontFamily: "'IBM Plex Serif', serif" }}>1er período — convenio original</div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 14 }}>
@@ -754,14 +782,14 @@ function PasantiaForm({ initial, onSave, onCancel, catalogos, onAddCatalogo, dni
             checked={tieneRenovacion}
             onChange={(e) => {
               setTieneRenovacion(e.target.checked);
-              if (e.target.checked && !form.renovacion) set("renovacion", { inicio: suggestRenovacionInicio(), fin: "", convenio: "", resolucion: "" });
+              if (e.target.checked && !form.renovacion) set("renovacion", { inicio: suggestRenovacionInicio(), fin: "", convenio: "", resolucion: "", expediente: "" });
               if (!e.target.checked) set("renovacion", null);
             }}
           />
           Tiene renovación
         </label>
         {tieneRenovacion && (
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 14, marginTop: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr 1fr", gap: 14, marginTop: 10 }}>
             <div>
               <label style={label}>Desde</label>
               <input type="date" style={inputStyle} value={form.renovacion?.inicio || ""} onChange={(e) => set("renovacion.inicio", e.target.value)} />
@@ -769,6 +797,10 @@ function PasantiaForm({ initial, onSave, onCancel, catalogos, onAddCatalogo, dni
             <div>
               <label style={label}>Hasta</label>
               <input type="date" style={inputStyle} value={form.renovacion?.fin || ""} onChange={(e) => set("renovacion.fin", e.target.value)} />
+            </div>
+            <div>
+              <label style={label}>N° de expediente</label>
+              <input style={inputStyle} value={form.renovacion?.expediente || ""} onChange={(e) => set("renovacion.expediente", e.target.value)} placeholder="Dónde tramita" />
             </div>
             <div>
               <label style={label}>Acta N°</label>
@@ -1012,6 +1044,8 @@ const emptyTramite = () => ({
   cantidadMeses: "",
   fechaProbableInicio: "",
   detalles: [{ id: uid(), carrera: "", universidad: "", cantidadPasantes: "" }],
+  esRenovacion: false,
+  pasantesRenovar: [], // DNIs de las pasantías que este trámite renueva
 });
 
 function VerPasanteModal({ p, onClose }) {
@@ -1046,6 +1080,7 @@ function VerPasanteModal({ p, onClose }) {
         {row("Universidad / Instituto", p.universidad)}
         {row("Carrera", p.carrera)}
         {row("Expediente TIMBO", p.expediente)}
+        {row("Observaciones", p.observaciones)}
 
         {sectionTitle("1er período")}
         {row("Desde", fmt(p.periodo1?.inicio))}
@@ -1058,6 +1093,7 @@ function VerPasanteModal({ p, onClose }) {
             {sectionTitle("Renovación")}
             {row("Desde", fmt(p.renovacion.inicio))}
             {row("Hasta", fmt(p.renovacion.fin))}
+            {row("N° de expediente", p.renovacion.expediente)}
             {row("Acta N°", p.renovacion.convenio)}
             {row("Resolución N°", p.renovacion.resolucion)}
           </>
@@ -1116,7 +1152,9 @@ function VerTramiteModal({ t, onClose }) {
   const sectionTitle = (title) => (
     <div style={{ fontSize: 12.5, fontWeight: 700, color: "#1B2A4A", marginTop: 16, marginBottom: 4, fontFamily: "'IBM Plex Serif', serif" }}>{title}</div>
   );
-  const totalPasantes = (t.detalles || []).reduce((acc, d) => acc + (Number(d.cantidadPasantes) || 0), 0);
+  const totalPasantes = t.esRenovacion
+    ? (t.pasantesRenovar || []).length
+    : (t.detalles || []).reduce((acc, d) => acc + (Number(d.cantidadPasantes) || 0), 0);
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(27,42,74,0.35)", display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "40px 20px", overflowY: "auto", zIndex: 50 }}>
       <div style={{ background: "#fff", borderRadius: 12, padding: 26, width: "100%", maxWidth: 560, boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
@@ -1126,6 +1164,9 @@ function VerTramiteModal({ t, onClose }) {
             <X size={20} />
           </button>
         </div>
+        {t.esRenovacion && (
+          <span style={{ padding: "3px 10px", borderRadius: 20, fontSize: 12, fontWeight: 600, color: "#2F6E5E", background: "#EAF3EF", marginRight: 6 }}>Trámite de renovación</span>
+        )}
         {t.estado && (
           <span style={{ padding: "3px 10px", borderRadius: 20, fontSize: 12, fontWeight: 600, color: colorPorEstado(t.estado).color, background: colorPorEstado(t.estado).bg }}>{t.estado}</span>
         )}
@@ -1135,15 +1176,28 @@ function VerTramiteModal({ t, onClose }) {
         {row("Habilitación pagadora", t.habilitacionPagadora)}
         {row("Jurisdicción", t.jurisdiccion)}
         {row("Cantidad de meses a contratar", t.cantidadMeses)}
-        {row("Fecha probable de inicio", fmt(t.fechaProbableInicio))}
+        {!t.esRenovacion && row("Fecha probable de inicio", fmt(t.fechaProbableInicio))}
         {row("Total de pasantes solicitados", totalPasantes)}
 
-        {sectionTitle("Carreras / universidades solicitadas")}
-        {(t.detalles || []).filter((d) => d.universidad || d.carrera).map((d, i) => (
-          <div key={i} style={{ fontSize: 12.5, padding: "6px 0", borderBottom: "1px solid #F0F1EE" }}>
-            {d.cantidadPasantes || "—"} × {d.carrera || "(sin carrera)"} — {d.universidad || "(sin universidad)"}
-          </div>
-        ))}
+        {t.esRenovacion ? (
+          <>
+            {sectionTitle("Pasantes a renovar")}
+            {(t.pasantesRenovar || []).map((pr, i) => (
+              <div key={i} style={{ fontSize: 12.5, padding: "6px 0", borderBottom: "1px solid #F0F1EE" }}>
+                {pr.nombre} (DNI {pr.dni}) — {pr.carrera || "sin carrera"} · {pr.universidad || "sin universidad"} · inicio probable {fmt(pr.fechaProbableInicio)}
+              </div>
+            ))}
+          </>
+        ) : (
+          <>
+            {sectionTitle("Carreras / universidades solicitadas")}
+            {(t.detalles || []).filter((d) => d.universidad || d.carrera).map((d, i) => (
+              <div key={i} style={{ fontSize: 12.5, padding: "6px 0", borderBottom: "1px solid #F0F1EE" }}>
+                {d.cantidadPasantes || "—"} × {d.carrera || "(sin carrera)"} — {d.universidad || "(sin universidad)"}
+              </div>
+            ))}
+          </>
+        )}
 
         {t.observaciones && (
           <>
@@ -1186,7 +1240,9 @@ function TramiteForm({ initial, onSave, onCancel, catalogos, onAddCatalogo }) {
   };
   const label = { fontSize: 12, fontWeight: 600, color: "#5B6158", marginBottom: 4, display: "block", textTransform: "uppercase", letterSpacing: "0.03em" };
 
-  const totalPasantes = (form.detalles || []).reduce((acc, d) => acc + (Number(d.cantidadPasantes) || 0), 0);
+  const totalPasantes = form.esRenovacion
+    ? (form.pasantesRenovar || []).length
+    : (form.detalles || []).reduce((acc, d) => acc + (Number(d.cantidadPasantes) || 0), 0);
 
   const updateDetalle = (id, key, value) =>
     setForm((f) => ({ ...f, detalles: f.detalles.map((d) => (d.id === id ? { ...d, [key]: value } : d)) }));
@@ -1195,6 +1251,9 @@ function TramiteForm({ initial, onSave, onCancel, catalogos, onAddCatalogo }) {
   const removeDetalle = (id) =>
     setForm((f) => ({ ...f, detalles: f.detalles.length > 1 ? f.detalles.filter((d) => d.id !== id) : f.detalles }));
 
+  const updatePasanteRenovar = (dni, key, value) =>
+    setForm((f) => ({ ...f, pasantesRenovar: f.pasantesRenovar.map((pr) => (pr.dni === dni ? { ...pr, [key]: value } : pr)) }));
+
   const submit = () => {
     if (!form.expediente) return;
     onSave({ ...form, id: form.id || uid() });
@@ -1202,6 +1261,16 @@ function TramiteForm({ initial, onSave, onCancel, catalogos, onAddCatalogo }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {form.esRenovacion && (
+        <div style={{ padding: "10px 14px", background: "#EAF3EF", border: "1px solid #CFE6DC", borderRadius: 8, fontSize: 12.5, color: "#2F6E5E" }}>
+          <strong>Trámite de renovación</strong> — cubre a {(form.pasantesRenovar || []).length} pasante{(form.pasantesRenovar || []).length !== 1 ? "s" : ""}, cada uno con su propia fecha probable de inicio (ver más abajo). Podés ajustarlas si hace falta antes de guardar.
+        </div>
+      )}
+      {form.esRenovacion && form.habilitacionesDistintas && (
+        <div style={{ padding: "10px 14px", background: "#FBF3E4", border: "1px solid #E9D8AE", borderRadius: 8, fontSize: 12.5, color: "#8A6420" }}>
+          Ojo: los pasantes seleccionados tienen distintas habilitaciones pagadoras. Revisá si corresponde armar trámites separados para cada una, o si es correcto que compartan este mismo expediente.
+        </div>
+      )}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
         <div>
           <label style={label}>Expediente</label>
@@ -1211,10 +1280,12 @@ function TramiteForm({ initial, onSave, onCancel, catalogos, onAddCatalogo }) {
           <label style={label}>Cantidad de meses a contratar</label>
           <input type="number" min="1" style={inputStyle} value={form.cantidadMeses} onChange={(e) => set("cantidadMeses", e.target.value)} />
         </div>
-        <div>
-          <label style={label}>Fecha probable de inicio</label>
-          <input type="date" style={inputStyle} value={form.fechaProbableInicio} onChange={(e) => set("fechaProbableInicio", e.target.value)} />
-        </div>
+        {!form.esRenovacion && (
+          <div>
+            <label style={label}>Fecha probable de inicio</label>
+            <input type="date" style={inputStyle} value={form.fechaProbableInicio} onChange={(e) => set("fechaProbableInicio", e.target.value)} />
+          </div>
+        )}
         <div>
           <label style={label}>Lugar de trabajo</label>
           <input style={inputStyle} value={form.lugarTrabajo} onChange={(e) => set("lugarTrabajo", e.target.value)} />
@@ -1243,6 +1314,34 @@ function TramiteForm({ initial, onSave, onCancel, catalogos, onAddCatalogo }) {
         </div>
       </div>
 
+      {form.esRenovacion ? (
+        <div style={{ padding: 14, background: "#F6F7F5", borderRadius: 8, border: "1px solid #E7E9E4" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#1B2A4A", fontFamily: "'IBM Plex Serif', serif" }}>Pasantes a renovar</div>
+            <div style={{ fontSize: 12.5, color: "#5B6158" }}>Total: <strong>{totalPasantes}</strong> pasante{totalPasantes !== 1 ? "s" : ""}</div>
+          </div>
+          {(form.pasantesRenovar || []).map((pr) => (
+            <div key={pr.dni} style={{ display: "grid", gridTemplateColumns: "1.6fr 1.2fr 1.2fr 1fr", gap: 10, alignItems: "end", marginBottom: 8, padding: 10, background: "#fff", borderRadius: 6, border: "1px solid #E7E9E4" }}>
+              <div>
+                <label style={label}>Pasante</label>
+                <div style={{ fontSize: 13, fontWeight: 600, padding: "9px 0" }}>{pr.nombre} <span style={{ color: "#8A9088", fontWeight: 400 }}>· DNI {pr.dni}</span></div>
+              </div>
+              <div>
+                <label style={label}>Carrera</label>
+                <div style={{ fontSize: 13, padding: "9px 0" }}>{pr.carrera || "—"}</div>
+              </div>
+              <div>
+                <label style={label}>Universidad</label>
+                <div style={{ fontSize: 13, padding: "9px 0" }}>{pr.universidad || "—"}</div>
+              </div>
+              <div>
+                <label style={label}>Fecha probable de inicio</label>
+                <input type="date" style={inputStyle} value={pr.fechaProbableInicio || ""} onChange={(e) => updatePasanteRenovar(pr.dni, "fechaProbableInicio", e.target.value)} />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
       <div style={{ padding: 14, background: "#F6F7F5", borderRadius: 8, border: "1px solid #E7E9E4" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: "#1B2A4A", fontFamily: "'IBM Plex Serif', serif" }}>Carreras / universidades solicitadas</div>
@@ -1278,6 +1377,7 @@ function TramiteForm({ initial, onSave, onCancel, catalogos, onAddCatalogo }) {
           <Plus size={14} /> Agregar otra carrera / universidad
         </button>
       </div>
+      )}
 
       <div>
         <label style={label}>Observaciones</label>
@@ -1317,17 +1417,27 @@ function LiquidacionView({ liq, etiqueta, nombreCentralizada, onExport, onPrint,
     liq.filas.forEach((f) => {
       const ee = eeMap[f.p.dni];
       if (!ee) return;
-      if (!map.has(ee)) map.set(ee, { ee, cantidad: 0, monto: 0, iapos: 0, gastoAdmin: 0 });
+      if (!map.has(ee)) map.set(ee, { ee, cantidad: 0, monto: 0, iapos: 0, gastoAdmin: 0, filas: [] });
       const g = map.get(ee);
       g.cantidad += 1;
       g.monto += f.monto;
       g.iapos += f.iapos;
       g.gastoAdmin += f.gastoAdmin;
+      g.filas.push(f);
     });
     return Array.from(map.values())
       .map((g) => ({ ...g, total: g.monto + g.iapos + g.gastoAdmin }))
       .sort((a, b) => a.ee.localeCompare(b.ee));
   })();
+
+  // Total en vivo de lo que está tildado en este momento, antes de asignarle el N° de EE
+  // (para poder chequear contra el expediente físico antes de confirmar).
+  const totalSeleccion = liq.filas
+    .filter((f) => seleccionados.includes(f.p.dni))
+    .reduce(
+      (acc, f) => ({ monto: acc.monto + f.monto, iapos: acc.iapos + f.iapos, gastoAdmin: acc.gastoAdmin + f.gastoAdmin }),
+      { monto: 0, iapos: 0, gastoAdmin: 0 }
+    );
 
   const toggleSel = (dni) => setSeleccionados((s) => (s.includes(dni) ? s.filter((x) => x !== dni) : [...s, dni]));
   const asignar = () => {
@@ -1439,7 +1549,7 @@ function LiquidacionView({ liq, etiqueta, nombreCentralizada, onExport, onPrint,
       )}
 
       {onAsignarEE && (
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, padding: "8px 12px", background: seleccionados.length ? "#EAF3EF" : "#F6F7F5", borderRadius: 8, fontSize: 12.5 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, padding: "8px 12px", background: seleccionados.length ? "#EAF3EF" : "#F6F7F5", borderRadius: 8, fontSize: 12.5, flexWrap: "wrap" }}>
           <span style={{ color: "#5B6158" }}>{seleccionados.length} seleccionado{seleccionados.length !== 1 ? "s" : ""}</span>
           <input
             placeholder="N° de EE"
@@ -1456,40 +1566,63 @@ function LiquidacionView({ liq, etiqueta, nombreCentralizada, onExport, onPrint,
               Limpiar selección
             </button>
           )}
+          {seleccionados.length > 0 && (
+            <div style={{ width: "100%", display: "flex", gap: 16, paddingTop: 6, borderTop: "1px solid #CFE6DC", marginTop: 2, color: "#1B2A4A", fontWeight: 600 }}>
+              <span>Asignación: {moneyFmt(totalSeleccion.monto)}</span>
+              <span>IAPOS: {moneyFmt(totalSeleccion.iapos)}</span>
+              <span>Aporte universidad/institución: {moneyFmt(totalSeleccion.gastoAdmin)}</span>
+              <span>Total: {moneyFmt(totalSeleccion.monto + totalSeleccion.iapos + totalSeleccion.gastoAdmin)}</span>
+            </div>
+          )}
         </div>
       )}
 
       {totalesPorEE.length > 0 && (
-        <div style={{ background: "#fff", border: "1px solid #E7E9E4", borderRadius: 10, marginBottom: 16, overflow: "hidden" }}>
-          <div style={{ padding: "10px 16px", background: "#F6F7F5", borderBottom: "1px solid #E7E9E4", fontWeight: 700, fontSize: 13.5, color: "#1B2A4A" }}>
-            Totales por N° de EE
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, color: "#1B2A4A", fontFamily: "'IBM Plex Serif', serif", marginBottom: 8 }}>
+            Reporte por N° de EE
           </div>
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr>
-                  <th style={th}>N° EE</th>
-                  <th style={th}>Pasantías</th>
-                  <th style={th}>Asignación</th>
-                  <th style={th}>IAPOS</th>
-                  <th style={th}>Gasto adm.</th>
-                  <th style={th}>Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {totalesPorEE.map((g) => (
-                  <tr key={g.ee}>
-                    <td style={td}>{g.ee}</td>
-                    <td style={td}>{g.cantidad}</td>
-                    <td style={td}>{moneyFmt(g.monto)}</td>
-                    <td style={td}>{moneyFmt(g.iapos)}</td>
-                    <td style={td}>{moneyFmt(g.gastoAdmin)}</td>
-                    <td style={{ ...td, fontWeight: 700 }}>{moneyFmt(g.total)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          {totalesPorEE.map((g) => (
+            <div key={g.ee} style={{ background: "#fff", border: "1px solid #E7E9E4", borderRadius: 10, marginBottom: 12, overflow: "hidden" }}>
+              <div style={{ padding: "10px 16px", background: "#F6F7F5", borderBottom: "1px solid #E7E9E4", fontWeight: 700, fontSize: 13.5, color: "#1B2A4A" }}>
+                Expediente {g.ee} · {g.cantidad} pasante{g.cantidad !== 1 ? "s" : ""}
+              </div>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>
+                      <th style={th}>Pasante</th>
+                      <th style={th}>Universidad</th>
+                      <th style={th}>Habilitación pagadora</th>
+                      <th style={th}>Asignación</th>
+                      <th style={th}>IAPOS</th>
+                      <th style={th}>Aporte univ./inst.</th>
+                      <th style={th}>Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {g.filas.map((f) => (
+                      <tr key={f.p.id}>
+                        <td style={td}>{f.p.nombre}</td>
+                        <td style={td}>{f.p.universidad}</td>
+                        <td style={td}>{f.p.habilitacionPagadora}</td>
+                        <td style={td}>{moneyFmt(f.monto)}</td>
+                        <td style={td}>{moneyFmt(f.iapos)}</td>
+                        <td style={td}>{moneyFmt(f.gastoAdmin)}</td>
+                        <td style={{ ...td, fontWeight: 700 }}>{moneyFmt(totalACargoHabilitacion(f))}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ padding: "10px 16px", background: "#F6F7F5", borderTop: "1px solid #E7E9E4", display: "flex", justifyContent: "flex-end", gap: 20, fontSize: 12.5 }}>
+                <span>Asignación: <strong>{moneyFmt(g.monto)}</strong></span>
+                <span>IAPOS: <strong>{moneyFmt(g.iapos)}</strong></span>
+                <span>Aporte univ./inst.: <strong>{moneyFmt(g.gastoAdmin)}</strong></span>
+                <span style={{ color: "#1B2A4A" }}>Total expediente: <strong>{moneyFmt(g.total)}</strong></span>
+              </div>
+            </div>
+          ))}
         </div>
       )}
 
@@ -1735,6 +1868,40 @@ function LiquidacionPrint({ liq, etiqueta, nombreCentralizada, eeMap, filtro, on
   );
 }
 
+// Arma los datos iniciales de un trámite de renovación a partir de una selección de pasantías.
+// Fecha probable de inicio = día siguiente al que termina el período vigente de cada una;
+// si se seleccionó más de una con fechas distintas, se toma la más temprana (para no dejar a nadie sin cobertura).
+function armarTramiteRenovacion(pasantesSeleccionados) {
+  if (pasantesSeleccionados.length === 0) return null;
+
+  const pasantesRenovar = pasantesSeleccionados.map((p) => {
+    const finVigente = toDate(p.renovacion?.fin || p.periodo1.fin);
+    return {
+      dni: p.dni,
+      nombre: p.nombre,
+      carrera: p.carrera || "",
+      universidad: p.universidad || "",
+      habilitacionPagadora: p.habilitacionPagadora || "",
+      fechaProbableInicio: addDays(finVigente, 1).toISOString().slice(0, 10),
+    };
+  });
+
+  const habilitaciones = Array.from(new Set(pasantesSeleccionados.map((p) => p.habilitacionPagadora || "")));
+  const habilitacionesDistintas = habilitaciones.length > 1;
+
+  const primero = pasantesSeleccionados[0];
+  return {
+    ...emptyTramite(),
+    lugarTrabajo: primero.lugarTrabajo || "",
+    habilitacionPagadora: primero.habilitacionPagadora || "",
+    jurisdiccion: primero.jurisdiccion || "",
+    esRenovacion: true,
+    pasantesRenovar,
+    habilitacionesDistintas,
+    observaciones: `Renovación de: ${pasantesSeleccionados.map((p) => `${p.nombre} (DNI ${p.dni})`).join(", ")}.`,
+  };
+}
+
 function liqPeriodKey(tipo, year, month) {
   return `${tipo}-${year}-${month}`;
 }
@@ -1749,54 +1916,99 @@ function getAsignacionParaPresupuesto(catalogos, year, month) {
 }
 
 function calcularPresupuestoTramite(t, catalogos) {
-  const renglones = (t.detalles || []).filter((d) => d.universidad && Number(d.cantidadPasantes) > 0);
-  if (!t.fechaProbableInicio || !t.cantidadMeses || renglones.length === 0) return null;
-  const inicio = toDate(t.fechaProbableInicio);
-  if (!inicio) return null;
-  const year = inicio.getFullYear();
-  const startMonth = inicio.getMonth();
-  const startDay = inicio.getDate();
-  const mesesHastaFinAno = 12 - startMonth;
-  const mesesACalcular = Math.min(Number(t.cantidadMeses), mesesHastaFinAno);
-  if (mesesACalcular <= 0) return null;
+  const cantidadMeses = Number(t.cantidadMeses);
+  if (!cantidadMeses) return null;
 
-  const cantidadPasantesTotal = renglones.reduce((acc, r) => acc + (Number(r.cantidadPasantes) || 0), 0);
-  const detalleMeses = [];
-  let totalGeneral = 0;
-  let faltanDatos = false;
+  // Cada "renglón" trae su propia fecha probable de inicio: en un trámite de renovación,
+  // cada pasante puede tener una fecha distinta (la suya propia); en un trámite normal,
+  // todos comparten la única fecha probable de inicio cargada en el trámite.
+  let renglonesBase;
+  if (t.esRenovacion) {
+    renglonesBase = (t.pasantesRenovar || [])
+      .filter((pr) => pr.universidad && pr.fechaProbableInicio)
+      .map((pr) => ({ nombre: pr.nombre, carrera: pr.carrera, universidad: pr.universidad, cantidadPasantes: 1, fechaProbableInicio: pr.fechaProbableInicio }));
+  } else {
+    if (!t.fechaProbableInicio) return null;
+    renglonesBase = (t.detalles || [])
+      .filter((d) => d.universidad && Number(d.cantidadPasantes) > 0)
+      .map((d) => ({ carrera: d.carrera, universidad: d.universidad, cantidadPasantes: Number(d.cantidadPasantes), fechaProbableInicio: t.fechaProbableInicio }));
+  }
+  if (renglonesBase.length === 0) return null;
 
-  for (let i = 0; i < mesesACalcular; i++) {
-    const month = startMonth + i;
-    const asig = getAsignacionParaPresupuesto(catalogos, year, month);
-    if (!asig) {
-      faltanDatos = true;
-      detalleMeses.push({ year, month, sinDato: true, porRenglon: [], totalMes: 0 });
-      continue;
-    }
-    let montoBase = asig.monto;
-    let esProrrateado = false;
-    let diasTrabajados = null;
-    if (i === 0 && startDay > 1) {
-      diasTrabajados = diasEnMes(year, month) - startDay + 1;
-      montoBase = (asig.monto / 30) * diasTrabajados;
-      esProrrateado = true;
-    }
-    const iaposBase = montoBase * (IAPOS_PCT / 100);
+  // Cada renglón calcula su propio rango de meses (desde su propia fecha, hasta cantidadMeses o fin de año).
+  const porRenglon = renglonesBase.map((r) => {
+    const inicio = toDate(r.fechaProbableInicio);
+    const year = inicio.getFullYear();
+    const startMonth = inicio.getMonth();
+    const startDay = inicio.getDate();
+    const mesesHastaFinAno = 12 - startMonth;
+    const mesesACalcular = Math.min(cantidadMeses, mesesHastaFinAno);
+    const uni = (catalogos.universidades || []).find((u) => u.nombre === r.universidad);
+    const gastoPct = uni ? Number(uni.gastoAdmin) || 0 : 0;
 
-    const porRenglon = renglones.map((r) => {
-      const uni = (catalogos.universidades || []).find((u) => u.nombre === r.universidad);
-      const gastoPct = uni ? Number(uni.gastoAdmin) || 0 : 0;
+    const meses = [];
+    let totalRenglon = 0;
+    for (let i = 0; i < mesesACalcular; i++) {
+      const month = startMonth + i;
+      const asig = getAsignacionParaPresupuesto(catalogos, year, month);
+      if (!asig) {
+        meses.push({ year, month, sinDato: true });
+        continue;
+      }
+      let montoBase = asig.monto;
+      let esProrrateado = false;
+      let diasTrabajados = null;
+      if (i === 0 && startDay > 1) {
+        diasTrabajados = diasEnMes(year, month) - startDay + 1;
+        montoBase = (asig.monto / 30) * diasTrabajados;
+        esProrrateado = true;
+      }
+      const iaposBase = montoBase * (IAPOS_PCT / 100);
       const gastoAdmin = montoBase * (gastoPct / 100);
       const totalPorPasante = montoBase + iaposBase + gastoAdmin;
-      const cantidad = Number(r.cantidadPasantes) || 0;
-      return { carrera: r.carrera, universidad: r.universidad, cantidadPasantes: cantidad, gastoPct, gastoAdmin, totalPorPasante, subtotal: totalPorPasante * cantidad };
-    });
-    const totalMes = porRenglon.reduce((acc, r) => acc + r.subtotal, 0);
-    totalGeneral += totalMes;
-    detalleMeses.push({ year, month, estimado: asig.estimado, esProrrateado, diasTrabajados, montoBase, iaposBase, porRenglon, totalMes });
-  }
+      const subtotal = totalPorPasante * r.cantidadPasantes;
+      totalRenglon += subtotal;
+      meses.push({ year, month, estimado: asig.estimado, esProrrateado, diasTrabajados, montoBase, iaposBase, gastoAdmin, totalPorPasante, subtotal });
+    }
+    return { ...r, gastoPct, meses, total: totalRenglon };
+  });
 
-  return { meses: mesesACalcular, mesesHastaFinAno, detalleMeses, totalGeneral, cantidadPasantesTotal, faltanDatos, renglones };
+  // Se reagrupa por mes (año-mes) para poder mostrar/exportar un detalle mensual combinado.
+  const detalleMesesMap = new Map();
+  porRenglon.forEach((r) => {
+    r.meses.forEach((m) => {
+      const key = `${m.year}-${m.month}`;
+      if (!detalleMesesMap.has(key)) detalleMesesMap.set(key, { year: m.year, month: m.month, porRenglon: [], totalMes: 0, sinDato: false });
+      const dm = detalleMesesMap.get(key);
+      if (m.sinDato) {
+        dm.sinDato = true;
+        return;
+      }
+      dm.porRenglon.push({
+        nombre: r.nombre,
+        carrera: r.carrera,
+        universidad: r.universidad,
+        cantidadPasantes: r.cantidadPasantes,
+        fechaProbableInicio: r.fechaProbableInicio,
+        gastoPct: r.gastoPct,
+        estimado: m.estimado,
+        esProrrateado: m.esProrrateado,
+        diasTrabajados: m.diasTrabajados,
+        montoBase: m.montoBase,
+        iaposBase: m.iaposBase,
+        gastoAdmin: m.gastoAdmin,
+        totalPorPasante: m.totalPorPasante,
+        subtotal: m.subtotal,
+      });
+      dm.totalMes += m.subtotal;
+    });
+  });
+  const detalleMeses = Array.from(detalleMesesMap.values()).sort((a, b) => a.year * 12 + a.month - (b.year * 12 + b.month));
+  const totalGeneral = detalleMeses.reduce((acc, d) => acc + d.totalMes, 0);
+  const cantidadPasantesTotal = renglonesBase.reduce((acc, r) => acc + r.cantidadPasantes, 0);
+  const faltanDatos = detalleMeses.some((d) => d.sinDato);
+
+  return { meses: detalleMeses.length, detalleMeses, totalGeneral, cantidadPasantesTotal, faltanDatos, renglones: porRenglon };
 }
 
 // ---------- Proyección de gasto (todas las pasantías vigentes, para un rango de meses) ----------
@@ -1866,7 +2078,7 @@ function exportProyeccionExcel(proyeccion) {
 function exportPresupuestoExcel(t, presupuesto) {
   const wb = XLSX.utils.book_new();
 
-  // Hoja 1: detalle por mes y por renglón (carrera/universidad)
+  // Hoja 1: detalle por mes y por renglón (cada renglón puede tener su propia fecha/prorrateo)
   const filasDetalle = [];
   presupuesto.detalleMeses.forEach((d) => {
     if (d.sinDato) {
@@ -1875,12 +2087,14 @@ function exportPresupuestoExcel(t, presupuesto) {
     }
     d.porRenglon.forEach((r) => {
       filasDetalle.push({
-        Mes: monthLabel(d.year, d.month) + (d.estimado ? " (estimado)" : "") + (d.esProrrateado ? ` — proporcional (${d.diasTrabajados} días)` : ""),
+        Mes: monthLabel(d.year, d.month) + (r.estimado ? " (estimado)" : "") + (r.esProrrateado ? ` — proporcional (${r.diasTrabajados} días)` : ""),
+        Pasante: r.nombre || "",
         Carrera: r.carrera,
         "Universidad/Instituto": r.universidad,
+        "Fecha probable de inicio": fmt(r.fechaProbableInicio),
         "Cantidad de pasantes": r.cantidadPasantes,
-        "Asignación estímulo (c/u)": Number(d.montoBase.toFixed(2)),
-        [`IAPOS (${IAPOS_PCT}%, c/u)`]: Number(d.iaposBase.toFixed(2)),
+        "Asignación estímulo (c/u)": Number(r.montoBase.toFixed(2)),
+        [`IAPOS (${IAPOS_PCT}%, c/u)`]: Number(r.iaposBase.toFixed(2)),
         "% Gasto admin.": r.gastoPct,
         "Gasto admin. (c/u)": Number(r.gastoAdmin.toFixed(2)),
         "Total por pasante": Number(r.totalPorPasante.toFixed(2)),
@@ -1951,10 +2165,13 @@ export default function App({ onLogout, userEmail } = {}) {
   const [pasantias, setPasantias] = useState([]);
   const [catalogos, setCatalogos] = useState(DEFAULT_CATALOGOS);
   const [loaded, setLoaded] = useState(false);
-  const [tab, setTab] = useState("resumen");
+  const [tab, setTab] = useState("avisos");
   const [modal, setModal] = useState(null); // {mode:'new'|'edit', data}
   const [verPasante, setVerPasante] = useState(null);
   const [verTramite, setVerTramite] = useState(null);
+  const [renovacionPicker, setRenovacionPicker] = useState(false);
+  const [renovacionSeleccion, setRenovacionSeleccion] = useState([]);
+  const [renovacionSearch, setRenovacionSearch] = useState("");
   const [proyeccionModal, setProyeccionModal] = useState(false);
   const [proyeccionDesde, setProyeccionDesde] = useState({ year: new Date().getFullYear(), month: new Date().getMonth() });
   const [proyeccionHasta, setProyeccionHasta] = useState({ year: new Date().getFullYear(), month: Math.min(new Date().getMonth() + 5, 11) });
@@ -2215,7 +2432,7 @@ export default function App({ onLogout, userEmail } = {}) {
     return enriched.filter((p) => {
       const matchSearch =
         !search ||
-        [p.nombre, p.lugarTrabajo, p.universidad, p.jurisdiccion, p.habilitacionPagadora].join(" ").toLowerCase().includes(search.toLowerCase());
+        [p.nombre, p.lugarTrabajo, p.universidad, p.jurisdiccion, p.habilitacionPagadora, p.expediente].join(" ").toLowerCase().includes(search.toLowerCase());
       const matchEstado = !filterEstado || p._estado === filterEstado;
       return matchSearch && matchEstado;
     });
@@ -2298,13 +2515,13 @@ export default function App({ onLogout, userEmail } = {}) {
     @media print {
       body * { visibility: hidden; }
       .print-area, .print-area * { visibility: visible; }
-      .print-area { position: fixed !important; inset: 0 !important; }
+      .print-area { position: absolute !important; left: 0 !important; top: 0 !important; width: 100% !important; height: auto !important; }
       .no-print { display: none !important; }
     }
   `;
 
   const navItems = [
-    { id: "resumen", label: "Resumen" },
+    { id: "avisos", label: "Avisos" },
     { id: "listado", label: "Pasantías" },
     { id: "tramites", label: "Trámites" },
     { id: "novedades", label: "Novedades" },
@@ -2392,18 +2609,20 @@ export default function App({ onLogout, userEmail } = {}) {
 
       <div style={{ maxWidth: 1180, margin: "0 auto", padding: "26px 28px 60px" }}>
         {/* -------- RESUMEN -------- */}
-        {tab === "resumen" && (
+        {tab === "avisos" && (
           <div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 26 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 26 }}>
               {[
-                ["vigente", "Vigentes"],
-                ["por_vencer_renovacion", "Por vencer (renovación)"],
-                ["por_vencer_final", "Por vencer (final)"],
-                ["suspendida", "Suspendidas"],
-                ["vencida", "Vencidas"],
-              ].map(([k, label]) => (
+                ["por_vencer_renovacion", "Por vencer · iniciar renovación", alertasVisibles.filter((p) => p._estado === "por_vencer_renovacion").length, ESTADOS.por_vencer_renovacion.color],
+                ["por_vencer_final", "Por vencer · finalización definitiva", alertas.filter((p) => p._estado === "por_vencer_final").length, ESTADOS.por_vencer_final.color],
+                ["notificadas", "Notificadas (ya gestionadas)", alertas.filter((p) => {
+                  if (p._estado !== "por_vencer_renovacion") return false;
+                  const key = `${p.id}-${p._vencEfectiva.toISOString().slice(0, 10)}`;
+                  return !!notificaciones[key];
+                }).length, "#2F6E5E"],
+              ].map(([k, label, valor, color]) => (
                 <div key={k} style={{ background: "#fff", border: "1px solid #E7E9E4", borderRadius: 10, padding: 16 }}>
-                  <div style={{ fontSize: 27, fontWeight: 700, color: ESTADOS[k].color, fontFamily: "'IBM Plex Serif', serif" }}>{conteos[k]}</div>
+                  <div style={{ fontSize: 27, fontWeight: 700, color, fontFamily: "'IBM Plex Serif', serif" }}>{valor}</div>
                   <div style={{ fontSize: 12.5, color: "#5B6158", marginTop: 2 }}>{label}</div>
                 </div>
               ))}
@@ -2486,7 +2705,7 @@ export default function App({ onLogout, userEmail } = {}) {
               <div style={{ position: "relative", flex: 1 }}>
                 <Search size={15} color="#8A9088" style={{ position: "absolute", left: 12, top: 11 }} />
                 <input
-                  placeholder="Buscar por nombre, lugar, universidad, jurisdicción…"
+                  placeholder="Buscar por nombre, lugar, universidad, jurisdicción o expediente TIMBO…"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   style={{ width: "100%", padding: "9px 12px 9px 34px", borderRadius: 7, border: "1px solid #DADCD6", fontSize: 14, boxSizing: "border-box" }}
@@ -2733,6 +2952,12 @@ export default function App({ onLogout, userEmail } = {}) {
                 />
               </div>
               <button
+                onClick={() => { setRenovacionSeleccion([]); setRenovacionSearch(""); setRenovacionPicker(true); }}
+                style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 16px", background: "#fff", color: "#1B2A4A", border: "1px solid #DADCD6", borderRadius: 7, fontSize: 14, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}
+              >
+                <RefreshCw size={15} /> Trámite de renovación
+              </button>
+              <button
                 onClick={() => ejecutarProtegido("edicion", () => setTramiteModal({ mode: "new", data: null }))}
                 style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 16px", background: "#1B2A4A", color: "#fff", border: "none", borderRadius: 7, fontSize: 14, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}
               >
@@ -2752,20 +2977,34 @@ export default function App({ onLogout, userEmail } = {}) {
             )}
 
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {tramitesFiltrados.map((t) => (
+              {tramitesFiltrados.map((t) => {
+                const totalPasantesTarjeta = t.esRenovacion
+                  ? (t.pasantesRenovar || []).length
+                  : (t.detalles || []).reduce((acc, d) => acc + (Number(d.cantidadPasantes) || 0), 0);
+                return (
                 <div key={t.id} style={{ background: "#fff", border: "1px solid #E7E9E4", borderRadius: 10, padding: "14px 16px" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                     <div>
-                      <div style={{ fontWeight: 700, fontSize: 15, fontFamily: "'IBM Plex Serif', serif" }}>
-                        Expediente {t.expediente} · {(t.detalles || []).reduce((acc, d) => acc + (Number(d.cantidadPasantes) || 0), 0)} pasante{(t.detalles || []).reduce((acc, d) => acc + (Number(d.cantidadPasantes) || 0), 0) !== 1 ? "s" : ""} en total
+                      <div style={{ fontWeight: 700, fontSize: 15, fontFamily: "'IBM Plex Serif', serif", display: "flex", alignItems: "center", gap: 8 }}>
+                        Expediente {t.expediente} · {totalPasantesTarjeta} pasante{totalPasantesTarjeta !== 1 ? "s" : ""} en total
+                        {t.esRenovacion && (
+                          <span style={{ fontSize: 10.5, padding: "2px 8px", borderRadius: 12, background: "#EAF3EF", color: "#2F6E5E", fontWeight: 600 }}>Renovación</span>
+                        )}
                       </div>
                       <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 6 }}>
-                        {(t.detalles || []).filter((d) => d.universidad || d.carrera).map((d) => (
-                          <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "#5B6158" }}>
-                            <GraduationCap size={12} />
-                            <span>{d.cantidadPasantes || "—"} × {d.carrera || "(sin carrera)"} — {d.universidad || "(sin universidad)"}</span>
-                          </div>
-                        ))}
+                        {t.esRenovacion
+                          ? (t.pasantesRenovar || []).map((pr) => (
+                              <div key={pr.dni} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "#5B6158" }}>
+                                <GraduationCap size={12} />
+                                <span>{pr.nombre} · {pr.carrera || "sin carrera"} — {pr.universidad || "sin universidad"} · inicio probable {fmt(pr.fechaProbableInicio)}</span>
+                              </div>
+                            ))
+                          : (t.detalles || []).filter((d) => d.universidad || d.carrera).map((d) => (
+                              <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "#5B6158" }}>
+                                <GraduationCap size={12} />
+                                <span>{d.cantidadPasantes || "—"} × {d.carrera || "(sin carrera)"} — {d.universidad || "(sin universidad)"}</span>
+                              </div>
+                            ))}
                       </div>
                       <div style={{ display: "flex", gap: 14, marginTop: 6, fontSize: 12.5, color: "#5B6158", flexWrap: "wrap" }}>
                         {t.lugarTrabajo && <span style={{ display: "flex", alignItems: "center", gap: 4 }}><MapPin size={12} />{t.lugarTrabajo}</span>}
@@ -2816,7 +3055,8 @@ export default function App({ onLogout, userEmail } = {}) {
                     </div>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
           );
@@ -3462,7 +3702,8 @@ export default function App({ onLogout, userEmail } = {}) {
                 </button>
               </div>
               <div style={{ fontSize: 12.5, color: "#5B6158", marginBottom: 8 }}>
-                Expediente {presupuestoModal.expediente} · {presupuesto.cantidadPasantesTotal} pasante{presupuesto.cantidadPasantesTotal !== 1 ? "s" : ""} en total · desde {fmt(presupuestoModal.fechaProbableInicio)} hasta el 31/12/{presupuesto.detalleMeses[0]?.year}
+                Expediente {presupuestoModal.expediente} · {presupuesto.cantidadPasantesTotal} pasante{presupuesto.cantidadPasantesTotal !== 1 ? "s" : ""} en total
+                {presupuestoModal.esRenovacion ? " · cada pasante con su propia fecha probable de inicio" : ` · desde ${fmt(presupuestoModal.fechaProbableInicio)}`} hasta el 31/12/{presupuesto.detalleMeses[0]?.year}
               </div>
               {estaFijado ? (
                 <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
@@ -3484,8 +3725,7 @@ export default function App({ onLogout, userEmail } = {}) {
                 <div key={`${d.year}-${d.month}`} style={{ marginBottom: 16 }}>
                   <div style={{ fontSize: 13, fontWeight: 700, color: "#1B2A4A", marginBottom: 6, textTransform: "capitalize" }}>
                     {monthLabel(d.year, d.month)}
-                    {d.sinDato ? " — sin valor cargado" : d.estimado ? " (estimado)" : ""}
-                    {d.esProrrateado && !d.sinDato && <span style={{ fontSize: 11, color: "#B8862F", fontWeight: 600 }}> · Proporcional ({d.diasTrabajados} días)</span>}
+                    {d.sinDato && " — sin valor cargado"}
                   </div>
                   {d.sinDato ? (
                     <div style={{ fontSize: 12.5, color: "#A6432D" }}>No hay valor de asignación cargado para este mes.</div>
@@ -3494,8 +3734,10 @@ export default function App({ onLogout, userEmail } = {}) {
                       <table style={{ width: "100%", borderCollapse: "collapse" }}>
                         <thead>
                           <tr>
+                            {presupuestoModal.esRenovacion && <th style={th}>Pasante</th>}
                             <th style={th}>Carrera</th>
                             <th style={th}>Universidad</th>
+                            {presupuestoModal.esRenovacion && <th style={th}>Desde</th>}
                             <th style={th}>Cant.</th>
                             <th style={th}>% Adm.</th>
                             <th style={th}>Total x pasante</th>
@@ -3505,11 +3747,17 @@ export default function App({ onLogout, userEmail } = {}) {
                         <tbody>
                           {d.porRenglon.map((r, i) => (
                             <tr key={i}>
+                              {presupuestoModal.esRenovacion && <td style={td}>{r.nombre || "—"}</td>}
                               <td style={td}>{r.carrera || "—"}</td>
                               <td style={td}>{r.universidad}</td>
+                              {presupuestoModal.esRenovacion && <td style={td}>{fmt(r.fechaProbableInicio)}</td>}
                               <td style={td}>{r.cantidadPasantes}</td>
                               <td style={td}>{r.gastoPct}%</td>
-                              <td style={td}>{moneyFmt(r.totalPorPasante)}</td>
+                              <td style={td}>
+                                {moneyFmt(r.totalPorPasante)}
+                                {r.esProrrateado && <div style={{ fontSize: 10, color: "#B8862F" }}>proporcional ({r.diasTrabajados} días)</div>}
+                                {r.estimado && <div style={{ fontSize: 10, color: "#B8862F" }}>estimado</div>}
+                              </td>
                               <td style={{ ...td, fontWeight: 700 }}>{moneyFmt(r.subtotal)}</td>
                             </tr>
                           ))}
@@ -3539,6 +3787,79 @@ export default function App({ onLogout, userEmail } = {}) {
 
       {verPasante && <VerPasanteModal p={verPasante} onClose={() => setVerPasante(null)} />}
       {verTramite && <VerTramiteModal t={verTramite} onClose={() => setVerTramite(null)} />}
+
+      {renovacionPicker && (() => {
+        const candidatos = pasantias
+          .filter((p) => !p.renovacion && !p.renuncia)
+          .filter((p) => {
+            if (!renovacionSearch) return true;
+            const q = renovacionSearch.toLowerCase();
+            return [p.nombre, p.dni, p.universidad, p.carrera].some((v) => (v || "").toLowerCase().includes(q));
+          })
+          .sort((a, b) => toDate(a.periodo1.fin) - toDate(b.periodo1.fin));
+        const toggleSel = (p) =>
+          setRenovacionSeleccion((sel) => (sel.some((x) => x.dni === p.dni) ? sel.filter((x) => x.dni !== p.dni) : [...sel, p]));
+        return (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(27,42,74,0.35)", display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "40px 20px", overflowY: "auto", zIndex: 55 }}>
+            <div style={{ background: "#fff", borderRadius: 12, padding: 26, width: "100%", maxWidth: 600, boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                <div style={{ fontFamily: "'IBM Plex Serif', serif", fontWeight: 700, fontSize: 17, color: "#1B2A4A" }}>Trámite de renovación</div>
+                <button onClick={() => setRenovacionPicker(false)} style={{ background: "none", border: "none", cursor: "pointer", color: "#8A9088" }}>
+                  <X size={20} />
+                </button>
+              </div>
+              <div style={{ fontSize: 12.5, color: "#8A9088", marginBottom: 14 }}>
+                Elegí los pasantes que van a incluirse en este mismo expediente de renovación (pueden ser varios). La fecha probable de inicio se sugiere sola: el día siguiente al vencimiento del que termina antes.
+              </div>
+              <div style={{ position: "relative", marginBottom: 12 }}>
+                <Search size={15} color="#8A9088" style={{ position: "absolute", left: 12, top: 11 }} />
+                <input
+                  placeholder="Buscar por nombre, DNI, universidad o carrera…"
+                  value={renovacionSearch}
+                  onChange={(e) => setRenovacionSearch(e.target.value)}
+                  style={{ width: "100%", padding: "9px 12px 9px 34px", borderRadius: 7, border: "1px solid #DADCD6", fontSize: 13.5, boxSizing: "border-box" }}
+                />
+              </div>
+              <div style={{ maxHeight: 320, overflowY: "auto", border: "1px solid #E7E9E4", borderRadius: 8 }}>
+                {candidatos.length === 0 && (
+                  <div style={{ padding: 20, textAlign: "center", color: "#8A9088", fontSize: 13 }}>No hay pasantías disponibles para renovar (sin renovación previa ni renuncia).</div>
+                )}
+                {candidatos.map((p) => {
+                  const marcado = renovacionSeleccion.some((x) => x.dni === p.dni);
+                  return (
+                    <label key={p.dni} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderBottom: "1px solid #F0F1EE", cursor: "pointer", background: marcado ? "#EAF3EF" : "#fff" }}>
+                      <input type="checkbox" checked={marcado} onChange={() => toggleSel(p)} />
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 13, fontWeight: 600 }}>{p.nombre} <span style={{ color: "#8A9088", fontWeight: 400 }}>· DNI {p.dni}</span></div>
+                        <div style={{ fontSize: 11.5, color: "#8A9088" }}>{p.universidad} · {p.carrera || "sin carrera"} · vence {fmt(p.periodo1.fin)}</div>
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 16 }}>
+                <span style={{ fontSize: 12.5, color: "#5B6158" }}>{renovacionSeleccion.length} seleccionado{renovacionSeleccion.length !== 1 ? "s" : ""}</span>
+                <div style={{ display: "flex", gap: 10 }}>
+                  <button onClick={() => setRenovacionPicker(false)} style={{ padding: "9px 16px", borderRadius: 6, border: "1px solid #DADCD6", background: "#fff", color: "#5B6158", fontSize: 13.5, cursor: "pointer", fontWeight: 600 }}>
+                    Cancelar
+                  </button>
+                  <button
+                    disabled={renovacionSeleccion.length === 0}
+                    onClick={() => {
+                      const nuevo = armarTramiteRenovacion(renovacionSeleccion);
+                      setRenovacionPicker(false);
+                      ejecutarProtegido("edicion", () => setTramiteModal({ mode: "new", data: nuevo }));
+                    }}
+                    style={{ padding: "9px 16px", borderRadius: 6, border: "none", background: renovacionSeleccion.length ? "#1B2A4A" : "#C7CDDB", color: "#fff", fontSize: 13.5, fontWeight: 600, cursor: renovacionSeleccion.length ? "pointer" : "not-allowed" }}
+                  >
+                    Continuar
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {proyeccionModal && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(27,42,74,0.35)", display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "40px 20px", overflowY: "auto", zIndex: 50 }}>
