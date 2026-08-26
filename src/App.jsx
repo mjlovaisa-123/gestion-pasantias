@@ -704,7 +704,11 @@ function PasantiaForm({ initial, onSave, onCancel, catalogos, onAddCatalogo, dni
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 22, marginTop: 18 }}>
         <div>
           <label style={label}>Lugar de trabajo</label>
-          <input style={inputStyle} value={form.lugarTrabajo} onChange={(e) => set("lugarTrabajo", e.target.value)} />
+          <select style={inputStyle} value={form.lugarTrabajo} onChange={(e) => set("lugarTrabajo", e.target.value)}>
+            <option value="">Seleccionar…</option>
+            {catalogos.lugaresTrabajo.map((l) => <option key={l} value={l}>{l}</option>)}
+          </select>
+          <AddToCatalog placeholder="Nuevo lugar de trabajo" onAdd={(v) => { onAddCatalogo("lugaresTrabajo", v); set("lugarTrabajo", v); }} />
         </div>
         <div>
           <label style={label}>Habilitación pagadora</label>
@@ -907,7 +911,7 @@ function PasantiaForm({ initial, onSave, onCancel, catalogos, onAddCatalogo, dni
 function textoAviso(p, estado) {
   const efectiva = fmt(fechaVencimientoEfectiva(p).toISOString().slice(0, 10));
   if (estado === "por_vencer_renovacion") {
-    return `Se informa que la pasantía de ${p.nombre} (DNI ${p.dni}), correspondiente al 1er período de contratación, vence el ${efectiva}. De corresponder su continuidad, deberá iniciarse la gestión de renovación de convenio dentro del expediente${p.expediente ? ` N.º ${p.expediente}` : ""}, con la debida antelación.`;
+    return `Se informa que la pasantía de ${p.nombre} (DNI ${p.dni}), correspondiente al 1er período de contratación, VENCE ${efectiva}.\nDe corresponder su continuidad, deberá anexar: 1) CONFORMIDAD DEL PASANTE, 2) Nota por el PERIODO a renovar (max 6 meses)\nPor último remitir al Sec.Coor. Adm y Financiera MGeIP la solicitud`;
   }
   return `Se informa que la pasantía de ${p.nombre} (DNI ${p.dni}) finaliza de manera definitiva el ${efectiva}, no correspondiendo nuevas renovaciones. Se solicita tomar las previsiones administrativas correspondientes.`;
 }
@@ -969,7 +973,7 @@ function AvisoPDF({ items, onClose }) {
       {single ? (
         <div>
           <DatosAviso p={items[0].p} />
-          <div style={{ fontSize: 13.5, lineHeight: 1.7, textAlign: "justify" }}>{textoAviso(items[0].p, items[0].estado)}</div>
+          <div style={{ fontSize: 13.5, lineHeight: 1.7, textAlign: "justify", whiteSpace: "pre-line" }}>{items[0].textoPersonalizado || textoAviso(items[0].p, items[0].estado)}</div>
           <div style={{ marginTop: 60, display: "flex", justifyContent: "space-between" }}>
             <div style={{ textAlign: "center", width: 220 }}>
               <div style={{ borderTop: "1px solid #20241F", paddingTop: 6, fontSize: 12, color: "#5B6158" }}>Firma responsable</div>
@@ -1018,6 +1022,7 @@ function normalizeCatalogos(raw) {
   merged.habilitaciones = merged.habilitaciones || [];
   merged.carreras = merged.carreras || [];
   merged.estadosTramite = merged.estadosTramite || [];
+  merged.lugaresTrabajo = merged.lugaresTrabajo || [];
   // Compatibilidad con backups viejos donde asignaciones no tenían id/creadoEl/norma.
   merged.asignaciones = (merged.asignaciones || []).map((a) => ({
     id: a.id || uid(),
@@ -1043,6 +1048,7 @@ const emptyTramite = () => ({
   observaciones: "",
   cantidadMeses: "",
   fechaProbableInicio: "",
+  fechaNotificacionUnidadAcademica: "",
   detalles: [{ id: uid(), carrera: "", universidad: "", cantidadPasantes: "" }],
   esRenovacion: false,
   pasantesRenovar: [], // DNIs de las pasantías que este trámite renueva
@@ -1177,6 +1183,7 @@ function VerTramiteModal({ t, onClose }) {
         {row("Jurisdicción", t.jurisdiccion)}
         {row("Cantidad de meses a contratar", t.cantidadMeses)}
         {!t.esRenovacion && row("Fecha probable de inicio", fmt(t.fechaProbableInicio))}
+        {row("Fecha de notificación a la unidad académica", fmt(t.fechaNotificacionUnidadAcademica))}
         {row("Total de pasantes solicitados", totalPasantes)}
 
         {t.esRenovacion ? (
@@ -1288,7 +1295,11 @@ function TramiteForm({ initial, onSave, onCancel, catalogos, onAddCatalogo }) {
         )}
         <div>
           <label style={label}>Lugar de trabajo</label>
-          <input style={inputStyle} value={form.lugarTrabajo} onChange={(e) => set("lugarTrabajo", e.target.value)} />
+          <select style={inputStyle} value={form.lugarTrabajo} onChange={(e) => set("lugarTrabajo", e.target.value)}>
+            <option value="">Seleccionar…</option>
+            {catalogos.lugaresTrabajo.map((l) => <option key={l} value={l}>{l}</option>)}
+          </select>
+          <AddToCatalog placeholder="Nuevo lugar de trabajo" onAdd={(v) => { onAddCatalogo("lugaresTrabajo", v); set("lugarTrabajo", v); }} />
         </div>
         <div>
           <label style={label}>Habilitación pagadora</label>
@@ -1311,6 +1322,11 @@ function TramiteForm({ initial, onSave, onCancel, catalogos, onAddCatalogo }) {
             {catalogos.estadosTramite.map((e) => <option key={e} value={e}>{e}</option>)}
           </select>
           <AddToCatalog placeholder="Nuevo estado (ej: En revisión legal)" onAdd={(v) => { onAddCatalogo("estadosTramite", v); set("estado", v); }} />
+        </div>
+        <div>
+          <label style={label}>Fecha de notificación a la unidad académica</label>
+          <input type="date" style={inputStyle} value={form.fechaNotificacionUnidadAcademica || ""} onChange={(e) => set("fechaNotificacionUnidadAcademica", e.target.value)} />
+          <div style={{ fontSize: 10.5, color: "#8A9088", marginTop: 3 }}>Cuándo se puso el Acta a disposición para firmar</div>
         </div>
       </div>
 
@@ -2156,6 +2172,7 @@ const DEFAULT_CATALOGOS = {
   centralizadaNombre: "",
   carreras: [],
   estadosTramite: [],
+  lugaresTrabajo: [],
   seguridad: { pwdEdicion: "", pwdLiquidacion: "", pwdCatalogo: "" },
 };
 
@@ -2188,7 +2205,8 @@ export default function App({ onLogout, userEmail } = {}) {
   const [repYear, setRepYear] = useState(new Date().getFullYear());
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [printData, setPrintData] = useState(null);
-  const [newCatItem, setNewCatItem] = useState({ jurisdicciones: "", habilitaciones: "", carreras: "", estadosTramite: "" });
+  const [avisoEditable, setAvisoEditable] = useState(null);
+  const [newCatItem, setNewCatItem] = useState({ jurisdicciones: "", habilitaciones: "", carreras: "", estadosTramite: "", lugaresTrabajo: "" });
   const [tramites, setTramites] = useState([]);
   const [nuevaUni, setNuevaUni] = useState({ nombre: "", gastoAdmin: "0", centralizada: false });
   const [nuevaAsig, setNuevaAsig] = useState({ year: new Date().getFullYear(), month: new Date().getMonth(), monto: "", norma: "", observacion: "" });
@@ -2674,7 +2692,7 @@ export default function App({ onLogout, userEmail } = {}) {
                       {requiereAccion && (
                         <>
                           <button
-                            onClick={() => setPrintData([{ p, estado: p._estado, restantes }])}
+                            onClick={() => setAvisoEditable({ p, estado: p._estado, restantes, texto: textoAviso(p, p._estado) })}
                             title="Generar aviso individual (PDF)"
                             style={{ background: "none", border: "1px solid #DADCD6", borderRadius: 6, cursor: "pointer", color: "#1B2A4A", padding: 7 }}
                           >
@@ -3010,6 +3028,11 @@ export default function App({ onLogout, userEmail } = {}) {
                         {t.lugarTrabajo && <span style={{ display: "flex", alignItems: "center", gap: 4 }}><MapPin size={12} />{t.lugarTrabajo}</span>}
                         {t.habilitacionPagadora && <span>{t.habilitacionPagadora}</span>}
                         {t.jurisdiccion && <span>{t.jurisdiccion}</span>}
+                        {t.fechaNotificacionUnidadAcademica ? (
+                          <span style={{ color: "#2F6E5E" }}>Notificado a unidad académica {fmt(t.fechaNotificacionUnidadAcademica)}</span>
+                        ) : (
+                          <span style={{ color: "#B8862F" }}>Sin notificar a unidad académica</span>
+                        )}
                       </div>
                       {t.observaciones && <div style={{ fontSize: 12.5, color: "#8A9088", marginTop: 6 }}>{t.observaciones}</div>}
                       {(t.cantidadMeses || t.fechaProbableInicio) && (
@@ -3421,12 +3444,13 @@ export default function App({ onLogout, userEmail } = {}) {
             </div>
 
             {/* Listas simples */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 16, marginBottom: 16 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr 1fr", gap: 16, marginBottom: 16 }}>
               {[
                 ["jurisdicciones", "Jurisdicciones"],
                 ["habilitaciones", "Habilitaciones pagadoras"],
                 ["carreras", "Carreras"],
                 ["estadosTramite", "Estados de trámite"],
+                ["lugaresTrabajo", "Lugares de trabajo"],
               ].map(([key, label]) => (
                 <div key={key} style={{ background: "#fff", border: "1px solid #E7E9E4", borderRadius: 10, padding: 14 }}>
                   <div style={{ fontFamily: "'IBM Plex Serif', serif", fontWeight: 600, fontSize: 14, marginBottom: 10, color: "#1B2A4A" }}>{label}</div>
@@ -3951,6 +3975,40 @@ export default function App({ onLogout, userEmail } = {}) {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+      {avisoEditable && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(27,42,74,0.35)", display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "40px 20px", overflowY: "auto", zIndex: 60 }}>
+          <div style={{ background: "#fff", borderRadius: 12, padding: 26, width: "100%", maxWidth: 560, boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <div style={{ fontFamily: "'IBM Plex Serif', serif", fontWeight: 700, fontSize: 17, color: "#1B2A4A" }}>Editar aviso antes de generar</div>
+              <button onClick={() => setAvisoEditable(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "#8A9088" }}>
+                <X size={20} />
+              </button>
+            </div>
+            <div style={{ fontSize: 12.5, color: "#8A9088", marginBottom: 12 }}>
+              {avisoEditable.p.nombre} · DNI {avisoEditable.p.dni} — revisá o ajustá el texto, después generás el PDF.
+            </div>
+            <textarea
+              value={avisoEditable.texto}
+              onChange={(e) => setAvisoEditable((a) => ({ ...a, texto: e.target.value }))}
+              style={{ width: "100%", minHeight: 180, padding: "10px 12px", borderRadius: 6, border: "1px solid #DADCD6", fontSize: 13.5, lineHeight: 1.6, boxSizing: "border-box", resize: "vertical", fontFamily: "'IBM Plex Sans', sans-serif" }}
+            />
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 16 }}>
+              <button onClick={() => setAvisoEditable(null)} style={{ padding: "9px 16px", borderRadius: 6, border: "1px solid #DADCD6", background: "#fff", color: "#5B6158", fontSize: 13.5, cursor: "pointer", fontWeight: 600 }}>
+                Cancelar
+              </button>
+              <button
+                onClick={() => {
+                  setPrintData([{ p: avisoEditable.p, estado: avisoEditable.estado, restantes: avisoEditable.restantes, textoPersonalizado: avisoEditable.texto }]);
+                  setAvisoEditable(null);
+                }}
+                style={{ padding: "9px 16px", borderRadius: 6, border: "none", background: "#1B2A4A", color: "#fff", fontSize: 13.5, cursor: "pointer", fontWeight: 600 }}
+              >
+                Generar PDF
+              </button>
+            </div>
           </div>
         </div>
       )}
