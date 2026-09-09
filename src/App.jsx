@@ -76,7 +76,7 @@ function getEstado(p, ref = new Date()) {
     // renuncia futura ya cargada: sigue vigente hasta esa fecha
   }
   if (restantes < 0) return "vencida";
-  if (restantes <= 60) return p.renovacion ? "por_vencer_final" : "por_vencer_renovacion";
+  if (restantes <= 120) return p.renovacion ? "por_vencer_final" : "por_vencer_renovacion";
   return "vigente";
 }
 const ESTADOS = {
@@ -2081,7 +2081,7 @@ function exportProyeccionExcel(proyeccion) {
         "Asignación estímulo": Number(f.monto.toFixed(2)),
         [`IAPOS (${IAPOS_PCT}%)`]: Number(f.iapos.toFixed(2)),
         "Gasto administrativo": Number(f.gastoAdmin.toFixed(2)),
-        Total: Number(totalACargoHabilitacion(f).toFixed(2)),
+        Total: Number((f.monto + f.iapos + f.gastoAdmin).toFixed(2)),
       });
     });
   });
@@ -2650,7 +2650,7 @@ export default function App({ onLogout, userEmail } = {}) {
               <div style={{ padding: "14px 18px", borderBottom: "1px solid #E7E9E4", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <AlertTriangle size={17} color="#B8862F" />
-                  <span style={{ fontFamily: "'IBM Plex Serif', serif", fontWeight: 600, fontSize: 15 }}>Alertas de vencimiento (próximos 60 días)</span>
+                  <span style={{ fontFamily: "'IBM Plex Serif', serif", fontWeight: 600, fontSize: 15 }}>Alertas de vencimiento (próximos 120 días)</span>
                 </div>
                 {alertasVisibles.some((p) => p._estado === "por_vencer_renovacion") && (
                   <button
