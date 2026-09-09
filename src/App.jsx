@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import {
   AlertTriangle,
   Plus,
@@ -2053,42 +2054,132 @@ function calcularProyeccion(pasantias, catalogos, desdeYear, desdeMonth, hastaYe
   return { meses, totalGeneral };
 }
 
-function exportProyeccionExcel(proyeccion) {
-  const wb = XLSX.utils.book_new();
+async function exportProyeccionExcel(proyeccion) {
+  const wb = new ExcelJS.Workbook();
 
-  const filasResumen = proyeccion.meses.map((mm) => ({
-    Mes: monthLabel(mm.year, mm.month) + (mm.sinDato ? " (sin valor cargado)" : mm.estimado ? " (estimado)" : ""),
-    "Total del mes": mm.sinDato ? "" : Number(mm.total.toFixed(2)),
-  }));
-  filasResumen.push({ Mes: "TOTAL", "Total del mes": Number(proyeccion.totalGeneral.toFixed(2)) });
-  const wsResumen = XLSX.utils.json_to_sheet(filasResumen);
-  XLSX.utils.book_append_sheet(wb, wsResumen, "Resumen mensual");
+  // Hoja 1: resumen mensual
+  const wsResumen = wb.addWorksheet("Resumen mensual");
+  wsResumen.columns = [
+    { header: "Mes", key: "mes", width: 26 },
+    { header: "Total del mes", key: "total", width: 18 },
+  ];
+  wsResumen.getRow(1).font = { bold: true };
+  proyeccion.meses.forEach((mm) => {
+    wsResumen.addRow({
+      mes: monthLabel(mm.year, mm.month) + (mm.sinDato ? " (sin valor cargado)" : mm.estimado ? " (estimado)" : ""),
+      total: mm.sinDato ? "" : Number(mm.total.toFixed(2)),
+    });
+  });
+  wsResumen.addRow({ mes: "TOTAL", total: Number(proyeccion.totalGeneral.toFixed(2)) }).font = { bold: true };
 
-  const filasDetalle = [];
+  // Hoja 2: detalle por pasantía — ordenado por jurisdicción, luego nombre, luego cronológico,
+  // con subtotales por pasante y por jurisdicción en las últimas 4 columnas, y los meses
+  // calculados en forma proporcional resaltados en color.
+  const filas = [];
   proyeccion.meses.forEach((mm) => {
     mm.filas.forEach((f) => {
-      filasDetalle.push({
-        Mes: monthLabel(mm.year, mm.month),
-        DNI: f.p.dni,
-        Nombre: f.p.nombre,
-        "Habilitación pagadora": f.p.habilitacionPagadora,
-        Jurisdicción: f.p.jurisdiccion,
-        "Universidad/Instituto": f.p.universidad,
-        Período: f.periodoTipo === "renovacion" ? "Renovación" : "Período inicial",
-        "Vigencia desde": fmt(f.vigenciaDesde),
-        "Vigencia hasta": fmt(f.vigenciaHasta),
-        "Días trabajados": f.dias,
-        "Asignación estímulo": Number(f.monto.toFixed(2)),
-        [`IAPOS (${IAPOS_PCT}%)`]: Number(f.iapos.toFixed(2)),
-        "Gasto administrativo": Number(f.gastoAdmin.toFixed(2)),
-        Total: Number((f.monto + f.iapos + f.gastoAdmin).toFixed(2)),
+      filas.push({
+        jurisdiccion: f.p.jurisdiccion || "(sin jurisdicción)",
+        nombre: f.p.nombre || "",
+        dni: f.p.dni,
+        ordenMes: mm.year * 12 + mm.month,
+        mes: monthLabel(mm.year, mm.month),
+        universidad: f.p.universidad,
+        habilitacionPagadora: f.p.habilitacionPagadora,
+        periodo: f.periodoTipo === "renovacion" ? "Renovación" : "Período inicial",
+        vigenciaDesde: fmt(f.vigenciaDesde),
+        vigenciaHasta: fmt(f.vigenciaHasta),
+        dias: f.dias,
+        esMesCompleto: f.esMesCompleto,
+        monto: f.monto,
+        iapos: f.iapos,
+        gastoAdmin: f.gastoAdmin,
+        total: f.monto + f.iapos + f.gastoAdmin,
       });
     });
   });
-  const wsDetalle = XLSX.utils.json_to_sheet(filasDetalle);
-  XLSX.utils.book_append_sheet(wb, wsDetalle, "Detalle por pasantía");
+  filas.sort(
+    (a, b) => a.jurisdiccion.localeCompare(b.jurisdiccion) || a.nombre.localeCompare(b.nombre) || a.ordenMes - b.ordenMes
+  );
 
-  XLSX.writeFile(wb, `proyeccion_gasto_${proyeccion.meses[0]?.year}-${(proyeccion.meses[0]?.month ?? 0) + 1}_a_${proyeccion.meses[proyeccion.meses.length - 1]?.year}-${(proyeccion.meses[proyeccion.meses.length - 1]?.month ?? 0) + 1}.xlsx`);
+  const wsDetalle = wb.addWorksheet("Detalle por pasantía");
+  const headers = [
+    "Jurisdicción", "Nombre", "DNI", "Mes", "Universidad/Instituto", "Habilitación pagadora", "Período",
+    "Vigencia desde", "Vigencia hasta", "Días trabajados", "Asignación estímulo", `IAPOS (${IAPOS_PCT}%)`, "Gasto administrativo", "Total",
+  ];
+  wsDetalle.addRow(headers).font = { bold: true };
+  wsDetalle.columns = headers.map((h) => ({ width: Math.max(15, h.length + 2) }));
+
+  const colorProrrateado = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFBE8C6" } };
+  const colorSubtotalNombre = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEAF3EF" } };
+  const colorSubtotalJurisdiccion = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1B2A4A" } };
+
+  let i = 0;
+  const totalGeneral = { monto: 0, iapos: 0, gastoAdmin: 0, total: 0 };
+  while (i < filas.length) {
+    const jurisdiccionActual = filas[i].jurisdiccion;
+    const jurisdiccionAcum = { monto: 0, iapos: 0, gastoAdmin: 0, total: 0 };
+
+    while (i < filas.length && filas[i].jurisdiccion === jurisdiccionActual) {
+      const nombreActual = filas[i].nombre;
+      const nombreAcum = { monto: 0, iapos: 0, gastoAdmin: 0, total: 0 };
+
+      while (i < filas.length && filas[i].jurisdiccion === jurisdiccionActual && filas[i].nombre === nombreActual) {
+        const f = filas[i];
+        const row = wsDetalle.addRow([
+          f.jurisdiccion, f.nombre, f.dni, f.mes, f.universidad, f.habilitacionPagadora, f.periodo,
+          f.vigenciaDesde, f.vigenciaHasta, f.dias,
+          Number(f.monto.toFixed(2)), Number(f.iapos.toFixed(2)), Number(f.gastoAdmin.toFixed(2)), Number(f.total.toFixed(2)),
+        ]);
+        if (!f.esMesCompleto) {
+          row.eachCell((cell) => { cell.fill = colorProrrateado; });
+        }
+        nombreAcum.monto += f.monto; nombreAcum.iapos += f.iapos; nombreAcum.gastoAdmin += f.gastoAdmin; nombreAcum.total += f.total;
+        i++;
+      }
+
+      const subtotalRow = wsDetalle.addRow([
+        "", `Subtotal ${nombreActual}`, "", "", "", "", "", "", "", "",
+        Number(nombreAcum.monto.toFixed(2)), Number(nombreAcum.iapos.toFixed(2)), Number(nombreAcum.gastoAdmin.toFixed(2)), Number(nombreAcum.total.toFixed(2)),
+      ]);
+      subtotalRow.font = { bold: true };
+      subtotalRow.eachCell((cell) => { cell.fill = colorSubtotalNombre; });
+
+      jurisdiccionAcum.monto += nombreAcum.monto; jurisdiccionAcum.iapos += nombreAcum.iapos; jurisdiccionAcum.gastoAdmin += nombreAcum.gastoAdmin; jurisdiccionAcum.total += nombreAcum.total;
+    }
+
+    const subtotalJurisRow = wsDetalle.addRow([
+      "", `Subtotal jurisdicción: ${jurisdiccionActual}`, "", "", "", "", "", "", "", "",
+      Number(jurisdiccionAcum.monto.toFixed(2)), Number(jurisdiccionAcum.iapos.toFixed(2)), Number(jurisdiccionAcum.gastoAdmin.toFixed(2)), Number(jurisdiccionAcum.total.toFixed(2)),
+    ]);
+    subtotalJurisRow.font = { bold: true, color: { argb: "FFFFFFFF" } };
+    subtotalJurisRow.eachCell((cell) => { cell.fill = colorSubtotalJurisdiccion; });
+
+    totalGeneral.monto += jurisdiccionAcum.monto; totalGeneral.iapos += jurisdiccionAcum.iapos; totalGeneral.gastoAdmin += jurisdiccionAcum.gastoAdmin; totalGeneral.total += jurisdiccionAcum.total;
+  }
+
+  wsDetalle.addRow([
+    "", "TOTAL GENERAL", "", "", "", "", "", "", "", "",
+    Number(totalGeneral.monto.toFixed(2)), Number(totalGeneral.iapos.toFixed(2)), Number(totalGeneral.gastoAdmin.toFixed(2)), Number(totalGeneral.total.toFixed(2)),
+  ]).font = { bold: true };
+
+  // Hoja 3: referencia del color
+  const wsLeyenda = wb.addWorksheet("Referencia");
+  wsLeyenda.addRow(["Color", "Significado"]).font = { bold: true };
+  const leyendaRow = wsLeyenda.addRow(["", "Mes calculado en forma proporcional (no es mes completo)"]);
+  leyendaRow.getCell(1).fill = colorProrrateado;
+  wsLeyenda.getColumn(2).width = 60;
+
+  const buffer = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buffer], { type: "application/octet-stream" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `proyeccion_gasto_${proyeccion.meses[0]?.year}-${(proyeccion.meses[0]?.month ?? 0) + 1}_a_${proyeccion.meses[proyeccion.meses.length - 1]?.year}-${(proyeccion.meses[proyeccion.meses.length - 1]?.month ?? 0) + 1}.xlsx`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 function exportPresupuestoExcel(t, presupuesto) {
