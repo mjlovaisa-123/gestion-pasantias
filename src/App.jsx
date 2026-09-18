@@ -188,7 +188,7 @@ function exportExcel({ detalle, grupos, nombreArchivo, hojaDetalle = "Detalle" }
   XLSX.writeFile(wb, nombreArchivo);
 }
 
-function filaLiquidacion(f, eeMap) {
+function filaLiquidacion(f, eeMap, eeMapCentralizada) {
   return {
     DNI: f.p.dni,
     Nombre: f.p.nombre,
@@ -207,11 +207,12 @@ function filaLiquidacion(f, eeMap) {
     "Gasto administrativo": Number(f.gastoAdmin.toFixed(2)),
     Total: Number(totalACargoHabilitacion(f).toFixed(2)),
     "N° EE": (eeMap && eeMap[f.p.dni]) || "",
-    Observación: [f.centralizada ? "Gasto administrativo abonado por la habilitación centralizada" : "", f.motivoDiff || ""].filter(Boolean).join(" · "),
+    "N° EE (centralizada)": f.centralizada ? (eeMapCentralizada && eeMapCentralizada[f.p.dni]) || "" : "",
+    Observación: [f.centralizada ? "Gasto administrativo abonado por la habilitación centralizada, con su propio N° de EE" : "", f.motivoDiff || ""].filter(Boolean).join(" · "),
   };
 }
 
-function exportLiquidacionExcel(liq, nombreArchivo, etiqueta, eeMap) {
+function exportLiquidacionExcel(liq, nombreArchivo, etiqueta, eeMap, eeMapCentralizada) {
   const wb = XLSX.utils.book_new();
 
   const filasSubtotales = liq.porHabilitacion.map((g) => ({
@@ -223,7 +224,7 @@ function exportLiquidacionExcel(liq, nombreArchivo, etiqueta, eeMap) {
   const wsSubtotales = XLSX.utils.json_to_sheet(filasSubtotales);
   XLSX.utils.book_append_sheet(wb, wsSubtotales, "Subtotales por habilitación");
 
-  const wsDetalle = XLSX.utils.json_to_sheet(liq.filas.map((f) => filaLiquidacion(f, eeMap)));
+  const wsDetalle = XLSX.utils.json_to_sheet(liq.filas.map((f) => filaLiquidacion(f, eeMap, eeMapCentralizada)));
   XLSX.utils.book_append_sheet(wb, wsDetalle, "Detalle " + etiqueta);
 
   if (liq.centralizada.length) {
@@ -239,6 +240,7 @@ function exportLiquidacionExcel(liq, nombreArchivo, etiqueta, eeMap) {
           "Universidad/Instituto": f.p.universidad,
           "% Gasto admin.": f.gastoPct,
           "Gasto administrativo": Number(f.gastoAdmin.toFixed(2)),
+          "N° EE (centralizada)": (eeMapCentralizada && eeMapCentralizada[f.p.dni]) || "",
         });
       });
     });
@@ -246,6 +248,8 @@ function exportLiquidacionExcel(liq, nombreArchivo, etiqueta, eeMap) {
     XLSX.utils.book_append_sheet(wb, wsCentral, "Centralizada (gasto admin.)");
   }
 
+  // N° de EE de la habilitación pagadora: asignación + IAPOS siempre; el gasto administrativo
+  // solo si la universidad no es centralizada (ese aporte tramita por un EE aparte, ver más abajo).
   if (eeMap && Object.keys(eeMap).length) {
     const porEEMap = new Map();
     liq.filas.forEach((f) => {
@@ -256,7 +260,7 @@ function exportLiquidacionExcel(liq, nombreArchivo, etiqueta, eeMap) {
       g.cantidad += 1;
       g.monto += f.monto;
       g.iapos += f.iapos;
-      g.gastoAdmin += f.gastoAdmin;
+      if (!f.centralizada) g.gastoAdmin += f.gastoAdmin;
       g.filas.push(f);
     });
     if (porEEMap.size) {
@@ -284,13 +288,59 @@ function exportLiquidacionExcel(liq, nombreArchivo, etiqueta, eeMap) {
             "Habilitación pagadora": f.p.habilitacionPagadora,
             "Asignación estímulo": Number(f.monto.toFixed(2)),
             [`IAPOS (${IAPOS_PCT}%)`]: Number(f.iapos.toFixed(2)),
-            "Aporte universidad/institución": Number(f.gastoAdmin.toFixed(2)),
+            "Aporte universidad/institución": f.centralizada ? "" : Number(f.gastoAdmin.toFixed(2)),
+            Observación: f.centralizada ? "Aporte tramita por EE de la centralizada (ver hoja aparte)" : "",
             Total: Number(totalACargoHabilitacion(f).toFixed(2)),
           });
         });
       });
       const wsDetalleEE = XLSX.utils.json_to_sheet(filasDetalleEE);
       XLSX.utils.book_append_sheet(wb, wsDetalleEE, "Detalle por EE");
+    }
+  }
+
+  // N° de EE de la centralizada: solo el aporte a universidad/institución de las pasantías
+  // centralizadas (UNL, etc.), que tramita por un expediente completamente aparte.
+  if (eeMapCentralizada && Object.keys(eeMapCentralizada).length) {
+    const porEECentralMap = new Map();
+    liq.filas.forEach((f) => {
+      if (!f.centralizada) return;
+      const ee = eeMapCentralizada[f.p.dni];
+      if (!ee) return;
+      if (!porEECentralMap.has(ee)) porEECentralMap.set(ee, { ee, cantidad: 0, gastoAdmin: 0, filas: [] });
+      const g = porEECentralMap.get(ee);
+      g.cantidad += 1;
+      g.gastoAdmin += f.gastoAdmin;
+      g.filas.push(f);
+    });
+    if (porEECentralMap.size) {
+      const gruposEECentral = Array.from(porEECentralMap.values()).sort((a, b) => a.ee.localeCompare(b.ee));
+
+      const filasResumenEECentral = gruposEECentral.map((g) => ({
+        "N° EE (centralizada)": g.ee,
+        Pasantías: g.cantidad,
+        "Aporte universidad/institución": Number(g.gastoAdmin.toFixed(2)),
+      }));
+      const wsResumenEECentral = XLSX.utils.json_to_sheet(filasResumenEECentral);
+      XLSX.utils.book_append_sheet(wb, wsResumenEECentral, "Resumen EE centralizada");
+
+      const filasDetalleEECentral = [];
+      gruposEECentral.forEach((g) => {
+        g.filas.forEach((f) => {
+          filasDetalleEECentral.push({
+            "N° EE (centralizada)": g.ee,
+            DNI: f.p.dni,
+            Nombre: f.p.nombre,
+            Jurisdicción: f.p.jurisdiccion,
+            "Habilitación pagadora (original)": f.p.habilitacionPagadora,
+            "Universidad/Instituto": f.p.universidad,
+            "% Gasto admin.": f.gastoPct,
+            "Aporte universidad/institución": Number(f.gastoAdmin.toFixed(2)),
+          });
+        });
+      });
+      const wsDetalleEECentral = XLSX.utils.json_to_sheet(filasDetalleEECentral);
+      XLSX.utils.book_append_sheet(wb, wsDetalleEECentral, "Detalle EE centralizada");
     }
   }
 
@@ -1412,11 +1462,13 @@ function TramiteForm({ initial, onSave, onCancel, catalogos, onAddCatalogo }) {
   );
 }
 
-function LiquidacionView({ liq, etiqueta, nombreCentralizada, onExport, onPrint, eeMap, onAsignarEE, readOnly, onConfirmar, confirmado, fechaConfirmacion }) {
+function LiquidacionView({ liq, etiqueta, nombreCentralizada, onExport, onPrint, eeMap, onAsignarEE, eeMapCentralizada, onAsignarEECentralizada, readOnly, onConfirmar, confirmado, fechaConfirmacion }) {
   const th = { textAlign: "left", padding: "7px 8px", fontSize: 11.5, fontWeight: 700, color: "#5B6158", textTransform: "uppercase", letterSpacing: "0.02em", borderBottom: "2px solid #E7E9E4" };
   const td = { padding: "7px 8px", fontSize: 12.5, borderBottom: "1px solid #F0F1EE" };
   const [seleccionados, setSeleccionados] = useState([]);
   const [eeInput, setEeInput] = useState("");
+  const [seleccionadosCentralizada, setSeleccionadosCentralizada] = useState([]);
+  const [eeInputCentralizada, setEeInputCentralizada] = useState("");
   const [printScope, setPrintScope] = useState("todo");
   const [printValue, setPrintValue] = useState("");
   const [filtroJurisdiccion, setFiltroJurisdiccion] = useState("");
@@ -1426,8 +1478,9 @@ function LiquidacionView({ liq, etiqueta, nombreCentralizada, onExport, onPrint,
   const totalGeneral = totalHabilitaciones + liq.centralizadaTotal;
   const jurisdiccionesDisponibles = Array.from(new Set(liq.filas.map((f) => f.p.jurisdiccion).filter(Boolean))).sort();
 
-  // Totales por N° de EE: agrupa las pasantías que tengan un expediente asignado,
-  // y suma cada concepto (asignación, IAPOS, gasto administrativo, total).
+  // Totales por N° de EE de la habilitación pagadora: solo lo que efectivamente paga esa
+  // habilitación (asignación + IAPOS siempre; el gasto administrativo solo si la universidad
+  // no es centralizada, porque en ese caso ese aporte lo paga la centralizada por otro expediente).
   const totalesPorEE = (() => {
     if (!eeMap) return [];
     const map = new Map();
@@ -1439,7 +1492,7 @@ function LiquidacionView({ liq, etiqueta, nombreCentralizada, onExport, onPrint,
       g.cantidad += 1;
       g.monto += f.monto;
       g.iapos += f.iapos;
-      g.gastoAdmin += f.gastoAdmin;
+      if (!f.centralizada) g.gastoAdmin += f.gastoAdmin;
       g.filas.push(f);
     });
     return Array.from(map.values())
@@ -1447,14 +1500,37 @@ function LiquidacionView({ liq, etiqueta, nombreCentralizada, onExport, onPrint,
       .sort((a, b) => a.ee.localeCompare(b.ee));
   })();
 
-  // Total en vivo de lo que está tildado en este momento, antes de asignarle el N° de EE
-  // (para poder chequear contra el expediente físico antes de confirmar).
+  // Totales por N° de EE de la centralizada: solo el aporte a la universidad/institución
+  // de las pasantías marcadas como centralizadas (UNL, etc.), que tramita por expediente aparte.
+  const totalesPorEECentralizada = (() => {
+    if (!eeMapCentralizada) return [];
+    const map = new Map();
+    liq.filas.forEach((f) => {
+      if (!f.centralizada) return;
+      const ee = eeMapCentralizada[f.p.dni];
+      if (!ee) return;
+      if (!map.has(ee)) map.set(ee, { ee, cantidad: 0, gastoAdmin: 0, filas: [] });
+      const g = map.get(ee);
+      g.cantidad += 1;
+      g.gastoAdmin += f.gastoAdmin;
+      g.filas.push(f);
+    });
+    return Array.from(map.values()).sort((a, b) => a.ee.localeCompare(b.ee));
+  })();
+
+  // Total en vivo de lo que está tildado en este momento en la tabla de habilitación pagadora,
+  // antes de asignarle el N° de EE (para poder chequear contra el expediente físico).
   const totalSeleccion = liq.filas
     .filter((f) => seleccionados.includes(f.p.dni))
     .reduce(
-      (acc, f) => ({ monto: acc.monto + f.monto, iapos: acc.iapos + f.iapos, gastoAdmin: acc.gastoAdmin + f.gastoAdmin }),
+      (acc, f) => ({ monto: acc.monto + f.monto, iapos: acc.iapos + f.iapos, gastoAdmin: acc.gastoAdmin + (f.centralizada ? 0 : f.gastoAdmin) }),
       { monto: 0, iapos: 0, gastoAdmin: 0 }
     );
+
+  // Ídem para lo tildado en la tabla de la centralizada (solo aporte a universidad/institución).
+  const totalSeleccionCentralizada = liq.filas
+    .filter((f) => f.centralizada && seleccionadosCentralizada.includes(f.p.dni))
+    .reduce((acc, f) => acc + f.gastoAdmin, 0);
 
   const toggleSel = (dni) => setSeleccionados((s) => (s.includes(dni) ? s.filter((x) => x !== dni) : [...s, dni]));
   const asignar = () => {
@@ -1462,6 +1538,15 @@ function LiquidacionView({ liq, etiqueta, nombreCentralizada, onExport, onPrint,
     onAsignarEE(seleccionados, eeInput.trim());
     setSeleccionados([]);
     setEeInput("");
+  };
+
+  const toggleSelCentralizada = (dni) =>
+    setSeleccionadosCentralizada((s) => (s.includes(dni) ? s.filter((x) => x !== dni) : [...s, dni]));
+  const asignarCentralizada = () => {
+    if (!eeInputCentralizada.trim() || seleccionadosCentralizada.length === 0) return;
+    onAsignarEECentralizada(seleccionadosCentralizada, eeInputCentralizada.trim());
+    setSeleccionadosCentralizada([]);
+    setEeInputCentralizada("");
   };
 
   const ejecutarImprimir = () => {
@@ -1597,7 +1682,7 @@ function LiquidacionView({ liq, etiqueta, nombreCentralizada, onExport, onPrint,
       {totalesPorEE.length > 0 && (
         <div style={{ marginBottom: 16 }}>
           <div style={{ fontWeight: 700, fontSize: 14, color: "#1B2A4A", fontFamily: "'IBM Plex Serif', serif", marginBottom: 8 }}>
-            Reporte por N° de EE
+            Reporte por N° de EE — Habilitación pagadora
           </div>
           {totalesPorEE.map((g) => (
             <div key={g.ee} style={{ background: "#fff", border: "1px solid #E7E9E4", borderRadius: 10, marginBottom: 12, overflow: "hidden" }}>
@@ -1620,12 +1705,15 @@ function LiquidacionView({ liq, etiqueta, nombreCentralizada, onExport, onPrint,
                   <tbody>
                     {g.filas.map((f) => (
                       <tr key={f.p.id}>
-                        <td style={td}>{f.p.nombre}</td>
+                        <td style={td}>
+                          {f.p.nombre}
+                          {f.centralizada && <div style={{ fontSize: 10.5, color: "#B8862F", fontWeight: 600 }}>Aporte univ./inst. va por EE de la centralizada</div>}
+                        </td>
                         <td style={td}>{f.p.universidad}</td>
                         <td style={td}>{f.p.habilitacionPagadora}</td>
                         <td style={td}>{moneyFmt(f.monto)}</td>
                         <td style={td}>{moneyFmt(f.iapos)}</td>
-                        <td style={td}>{moneyFmt(f.gastoAdmin)}</td>
+                        <td style={td}>{f.centralizada ? "—" : moneyFmt(f.gastoAdmin)}</td>
                         <td style={{ ...td, fontWeight: 700 }}>{moneyFmt(totalACargoHabilitacion(f))}</td>
                       </tr>
                     ))}
@@ -1637,6 +1725,46 @@ function LiquidacionView({ liq, etiqueta, nombreCentralizada, onExport, onPrint,
                 <span>IAPOS: <strong>{moneyFmt(g.iapos)}</strong></span>
                 <span>Aporte univ./inst.: <strong>{moneyFmt(g.gastoAdmin)}</strong></span>
                 <span style={{ color: "#1B2A4A" }}>Total expediente: <strong>{moneyFmt(g.total)}</strong></span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {totalesPorEECentralizada.length > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, color: "#1B2A4A", fontFamily: "'IBM Plex Serif', serif", marginBottom: 8 }}>
+            Reporte por N° de EE — Centralizada{nombreCentralizada ? ` (${nombreCentralizada})` : ""}
+          </div>
+          {totalesPorEECentralizada.map((g) => (
+            <div key={g.ee} style={{ background: "#fff", border: "1px solid #E7E9E4", borderRadius: 10, marginBottom: 12, overflow: "hidden" }}>
+              <div style={{ padding: "10px 16px", background: "#F6F7F5", borderBottom: "1px solid #E7E9E4", fontWeight: 700, fontSize: 13.5, color: "#1B2A4A" }}>
+                Expediente {g.ee} · {g.cantidad} pasante{g.cantidad !== 1 ? "s" : ""}
+              </div>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>
+                      <th style={th}>Pasante</th>
+                      <th style={th}>Universidad</th>
+                      <th style={th}>Habilitación pagadora (original)</th>
+                      <th style={th}>Aporte univ./inst.</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {g.filas.map((f) => (
+                      <tr key={f.p.id}>
+                        <td style={td}>{f.p.nombre}</td>
+                        <td style={td}>{f.p.universidad}</td>
+                        <td style={td}>{f.p.habilitacionPagadora}</td>
+                        <td style={{ ...td, fontWeight: 700 }}>{moneyFmt(f.gastoAdmin)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ padding: "10px 16px", background: "#F6F7F5", borderTop: "1px solid #E7E9E4", display: "flex", justifyContent: "flex-end", fontSize: 12.5 }}>
+                <span style={{ color: "#1B2A4A" }}>Total expediente: <strong>{moneyFmt(g.gastoAdmin)}</strong></span>
               </div>
             </div>
           ))}
@@ -1722,8 +1850,37 @@ function LiquidacionView({ liq, etiqueta, nombreCentralizada, onExport, onPrint,
             Liquidación centralizada{nombreCentralizada ? ` — ${nombreCentralizada}` : ""}
           </div>
           <div style={{ padding: "10px 16px", fontSize: 12, color: "#8A9088", borderBottom: "1px solid #E7E9E4" }}>
-            Detalle del gasto administrativo de estas pasantías (universidades centralizadas), agrupado por jurisdicción, para que la habilitación centralizada realice ese pago. La asignación estímulo y el IAPOS de estas pasantías ya están incluidos en la liquidación de su habilitación pagadora, arriba.
+            Detalle del gasto administrativo de estas pasantías (universidades centralizadas), agrupado por jurisdicción, para que la habilitación centralizada realice ese pago. La asignación estímulo y el IAPOS de estas pasantías ya están incluidos en la liquidación de su habilitación pagadora, arriba. El N° de EE de este pago es independiente del de la habilitación pagadora — tramitan por expedientes separados.
           </div>
+          {onAsignarEECentralizada && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 16px", background: seleccionadosCentralizada.length ? "#EAF3EF" : "#F6F7F5", borderBottom: "1px solid #E7E9E4", fontSize: 12.5, flexWrap: "wrap" }}>
+              <span style={{ color: "#5B6158" }}>{seleccionadosCentralizada.length} seleccionado{seleccionadosCentralizada.length !== 1 ? "s" : ""}</span>
+              <input
+                placeholder="N° de EE (centralizada)"
+                value={eeInputCentralizada}
+                onChange={(e) => setEeInputCentralizada(e.target.value)}
+                disabled={seleccionadosCentralizada.length === 0}
+                style={{ padding: "6px 9px", borderRadius: 6, border: "1px solid #DADCD6", fontSize: 12.5, width: 180 }}
+              />
+              <button
+                onClick={asignarCentralizada}
+                disabled={seleccionadosCentralizada.length === 0 || !eeInputCentralizada.trim()}
+                style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: seleccionadosCentralizada.length && eeInputCentralizada.trim() ? "#1B2A4A" : "#C7CDDB", color: "#fff", fontSize: 12.5, fontWeight: 600, cursor: seleccionadosCentralizada.length ? "pointer" : "not-allowed" }}
+              >
+                Asignar EE a seleccionados
+              </button>
+              {seleccionadosCentralizada.length > 0 && (
+                <button onClick={() => setSeleccionadosCentralizada([])} style={{ background: "none", border: "none", color: "#8A9088", fontSize: 12, cursor: "pointer" }}>
+                  Limpiar selección
+                </button>
+              )}
+              {seleccionadosCentralizada.length > 0 && (
+                <div style={{ width: "100%", fontWeight: 600, color: "#1B2A4A", paddingTop: 6, borderTop: "1px solid #CFE6DC", marginTop: 2 }}>
+                  Aporte univ./inst. seleccionado: {moneyFmt(totalSeleccionCentralizada)}
+                </div>
+              )}
+            </div>
+          )}
           {centralizadaVista.map((g) => (
             <div key={g.jurisdiccion}>
               <div style={{ padding: "9px 16px", background: "#F6F7F5", fontWeight: 600, fontSize: 13, color: "#1B2A4A" }}>{g.jurisdiccion}</div>
@@ -1731,7 +1888,7 @@ function LiquidacionView({ liq, etiqueta, nombreCentralizada, onExport, onPrint,
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
                     <tr>
-                      {onAsignarEE && <th style={th}></th>}
+                      {onAsignarEECentralizada && <th style={th}></th>}
                       <th style={th}>Pasante</th>
                       <th style={th}>Habilitación pagadora (original)</th>
                       <th style={th}>Lugar de trabajo</th>
@@ -1739,15 +1896,15 @@ function LiquidacionView({ liq, etiqueta, nombreCentralizada, onExport, onPrint,
                       <th style={th}>Vigencia</th>
                       <th style={th}>% Adm.</th>
                       <th style={th}>Gasto administrativo</th>
-                      <th style={th}>N° EE</th>
+                      <th style={th}>N° EE (centralizada)</th>
                     </tr>
                   </thead>
                   <tbody>
                     {g.filas.map((f) => (
                       <tr key={f.p.id}>
-                        {onAsignarEE && (
+                        {onAsignarEECentralizada && (
                           <td style={td}>
-                            <input type="checkbox" checked={seleccionados.includes(f.p.dni)} onChange={() => toggleSel(f.p.dni)} />
+                            <input type="checkbox" checked={seleccionadosCentralizada.includes(f.p.dni)} onChange={() => toggleSelCentralizada(f.p.dni)} />
                           </td>
                         )}
                         <td style={td}>{f.p.nombre}</td>
@@ -1757,7 +1914,7 @@ function LiquidacionView({ liq, etiqueta, nombreCentralizada, onExport, onPrint,
                         <td style={td}>{fmt(f.vigenciaDesde)} – {fmt(f.vigenciaHasta)}</td>
                         <td style={td}>{f.gastoPct}%</td>
                         <td style={{ ...td, fontWeight: 700 }}>{moneyFmt(f.gastoAdmin)}</td>
-                        <td style={td}>{(eeMap && eeMap[f.p.dni]) || "—"}</td>
+                        <td style={td}>{(eeMapCentralizada && eeMapCentralizada[f.p.dni]) || "—"}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1777,7 +1934,7 @@ function LiquidacionView({ liq, etiqueta, nombreCentralizada, onExport, onPrint,
   );
 }
 
-function LiquidacionPrint({ liq, etiqueta, nombreCentralizada, eeMap, filtro, onClose }) {
+function LiquidacionPrint({ liq, etiqueta, nombreCentralizada, eeMap, eeMapCentralizada, filtro, onClose }) {
   useEffect(() => {
     const t = setTimeout(() => window.print(), 150);
     return () => clearTimeout(t);
@@ -1864,6 +2021,7 @@ function LiquidacionPrint({ liq, etiqueta, nombreCentralizada, eeMap, filtro, on
                 <th style={th}>Lugar de trabajo</th>
                 <th style={th}>% Adm.</th>
                 <th style={th}>Gasto administrativo</th>
+                <th style={th}>N° EE</th>
               </tr>
             </thead>
             <tbody>
@@ -1874,6 +2032,7 @@ function LiquidacionPrint({ liq, etiqueta, nombreCentralizada, eeMap, filtro, on
                   <td style={td}>{f.p.lugarTrabajo}</td>
                   <td style={td}>{f.gastoPct}%</td>
                   <td style={{ ...td, fontWeight: 700 }}>{moneyFmt(f.gastoAdmin)}</td>
+                  <td style={td}>{(eeMapCentralizada && eeMapCentralizada[f.p.dni]) || ""}</td>
                 </tr>
               ))}
             </tbody>
@@ -2311,6 +2470,7 @@ export default function App({ onLogout, userEmail } = {}) {
   const [compNuevoValor, setCompNuevoValor] = useState("");
   const [compCalculada, setCompCalculada] = useState(false);
   const [eeMap, setEeMap] = useState({});
+  const [eeMapCentralizada, setEeMapCentralizada] = useState({});
   const [liquidaciones, setLiquidaciones] = useState([]);
   const [liqPrint, setLiqPrint] = useState(null);
   const [historialAbierto, setHistorialAbierto] = useState(null);
@@ -2337,6 +2497,10 @@ export default function App({ onLogout, userEmail } = {}) {
       try {
         const resEe = await window.storage.get("ee-v1", true);
         if (resEe?.value) setEeMap(JSON.parse(resEe.value));
+      } catch (e) {}
+      try {
+        const resEeCentral = await window.storage.get("ee-centralizada-v1", true);
+        if (resEeCentral?.value) setEeMapCentralizada(JSON.parse(resEeCentral.value));
       } catch (e) {}
       try {
         const resLiq = await window.storage.get("liquidaciones-v1", true);
@@ -2369,6 +2533,11 @@ export default function App({ onLogout, userEmail } = {}) {
     if (!loaded) return;
     window.storage.set("ee-v1", JSON.stringify(eeMap), true).catch(() => {});
   }, [eeMap, loaded]);
+
+  useEffect(() => {
+    if (!loaded) return;
+    window.storage.set("ee-centralizada-v1", JSON.stringify(eeMapCentralizada), true).catch(() => {});
+  }, [eeMapCentralizada, loaded]);
 
   useEffect(() => {
     if (!loaded) return;
@@ -2421,7 +2590,7 @@ export default function App({ onLogout, userEmail } = {}) {
   const [restoreMsg, setRestoreMsg] = useState("");
 
   const descargarBackup = () => {
-    const payload = { version: 3, exportadoEl: new Date().toISOString(), pasantias, catalogos, tramites, eeMap, liquidaciones, notificaciones };
+    const payload = { version: 4, exportadoEl: new Date().toISOString(), pasantias, catalogos, tramites, eeMap, eeMapCentralizada, liquidaciones, notificaciones };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -2461,11 +2630,12 @@ export default function App({ onLogout, userEmail } = {}) {
         setConfirmAction({
           message: `Se va a REEMPLAZAR todo lo que hay cargado ahora por el contenido de este backup (${okPasantias} pasantías). ¿Confirmás?`,
           onConfirm: () => {
-            // Compatible con backups viejos (version 1 y 2) que no tenían eeMap/liquidaciones/notificaciones.
+            // Compatible con backups viejos (version 1, 2 y 3) que no tenían eeMap/eeMapCentralizada/liquidaciones/notificaciones.
             if (Array.isArray(data.pasantias)) setPasantias(data.pasantias);
             if (data.catalogos) setCatalogos(normalizeCatalogos(data.catalogos));
             if (Array.isArray(data.tramites)) setTramites(data.tramites);
             if (data.eeMap && typeof data.eeMap === "object") setEeMap(data.eeMap);
+            if (data.eeMapCentralizada && typeof data.eeMapCentralizada === "object") setEeMapCentralizada(data.eeMapCentralizada);
             if (Array.isArray(data.liquidaciones)) setLiquidaciones(data.liquidaciones);
             if (data.notificaciones && typeof data.notificaciones === "object") setNotificaciones(data.notificaciones);
             setRestoreMsg(`Restaurado: ${okPasantias} pasantías.`);
@@ -3269,15 +3439,20 @@ export default function App({ onLogout, userEmail } = {}) {
                         onAsignarEE={(dnis, valor) =>
                           setEeMap((m) => ({ ...m, [periodKey]: { ...(m[periodKey] || {}), ...Object.fromEntries(dnis.map((d) => [d, valor])) } }))
                         }
+                        eeMapCentralizada={eeMapCentralizada[periodKey] || {}}
+                        onAsignarEECentralizada={(dnis, valor) =>
+                          setEeMapCentralizada((m) => ({ ...m, [periodKey]: { ...(m[periodKey] || {}), ...Object.fromEntries(dnis.map((d) => [d, valor])) } }))
+                        }
                         onExport={() =>
                           exportLiquidacionExcel(
                             liquidacionMensual,
                             `liquidacion_${monthLabel(liqYear, liqMes).replace(/\s|·/g, "_")}.xlsx`,
                             monthLabel(liqYear, liqMes),
-                            eeMap[periodKey]
+                            eeMap[periodKey],
+                            eeMapCentralizada[periodKey]
                           )
                         }
-                        onPrint={(filtro) => setLiqPrint({ liq: liquidacionMensual, etiqueta: monthLabel(liqYear, liqMes), eeMap: eeMap[periodKey], filtro })}
+                        onPrint={(filtro) => setLiqPrint({ liq: liquidacionMensual, etiqueta: monthLabel(liqYear, liqMes), eeMap: eeMap[periodKey], eeMapCentralizada: eeMapCentralizada[periodKey], filtro })}
                         onConfirmar={
                           baseMensual.tieneRegistros
                             ? null
@@ -3288,7 +3463,7 @@ export default function App({ onLogout, userEmail } = {}) {
                                     onConfirm: () => {
                                       setLiquidaciones((list) => [
                                         ...list,
-                                        { id: uid(), tipo: "mensual", year: liqYear, month: liqMes, valor: valorAsignacionMes, fechaConfirmacion: new Date().toISOString(), liq: liquidacionMensual, eeMap: eeMap[periodKey] || {} },
+                                        { id: uid(), tipo: "mensual", year: liqYear, month: liqMes, valor: valorAsignacionMes, fechaConfirmacion: new Date().toISOString(), liq: liquidacionMensual, eeMap: eeMap[periodKey] || {}, eeMapCentralizada: eeMapCentralizada[periodKey] || {} },
                                       ]);
                                     },
                                   })
@@ -3371,15 +3546,20 @@ export default function App({ onLogout, userEmail } = {}) {
                       onAsignarEE={(dnis, valor) =>
                         setEeMap((m) => ({ ...m, [periodKey]: { ...(m[periodKey] || {}), ...Object.fromEntries(dnis.map((d) => [d, valor])) } }))
                       }
+                      eeMapCentralizada={eeMapCentralizada[periodKey] || {}}
+                      onAsignarEECentralizada={(dnis, valor) =>
+                        setEeMapCentralizada((m) => ({ ...m, [periodKey]: { ...(m[periodKey] || {}), ...Object.fromEntries(dnis.map((d) => [d, valor])) } }))
+                      }
                       onExport={() =>
                         exportLiquidacionExcel(
                           liquidacionComp,
                           `complementaria_${monthLabel(compYear, compMes).replace(/\s|·/g, "_")}.xlsx`,
                           `Complementaria ${monthLabel(compYear, compMes)}`,
-                          eeMap[periodKey]
+                          eeMap[periodKey],
+                          eeMapCentralizada[periodKey]
                         )
                       }
-                      onPrint={(filtro) => setLiqPrint({ liq: liquidacionComp, etiqueta: `Complementaria ${monthLabel(compYear, compMes)}`, eeMap: eeMap[periodKey], filtro })}
+                      onPrint={(filtro) => setLiqPrint({ liq: liquidacionComp, etiqueta: `Complementaria ${monthLabel(compYear, compMes)}`, eeMap: eeMap[periodKey], eeMapCentralizada: eeMapCentralizada[periodKey], filtro })}
                       onConfirmar={() =>
                         ejecutarProtegido("liquidacion", () =>
                           setConfirmAction({
@@ -3387,7 +3567,7 @@ export default function App({ onLogout, userEmail } = {}) {
                             onConfirm: () => {
                               setLiquidaciones((list) => [
                                 ...list,
-                                { id: uid(), tipo: "complementaria", year: compYear, month: compMes, valor: valorUsadoComp, fechaConfirmacion: new Date().toISOString(), liq: liquidacionComp, eeMap: eeMap[periodKey] || {} },
+                                { id: uid(), tipo: "complementaria", year: compYear, month: compMes, valor: valorUsadoComp, fechaConfirmacion: new Date().toISOString(), liq: liquidacionComp, eeMap: eeMap[periodKey] || {}, eeMapCentralizada: eeMapCentralizada[periodKey] || {} },
                               ]);
                             },
                           })
@@ -3459,15 +3639,22 @@ export default function App({ onLogout, userEmail } = {}) {
                         setLiquidaciones((list) => list.map((r) => (r.id === historialAbierto.id ? { ...r, eeMap: nuevoEeMap } : r)));
                         setHistorialAbierto((h) => ({ ...h, eeMap: nuevoEeMap }));
                       }}
+                      eeMapCentralizada={historialAbierto.eeMapCentralizada || {}}
+                      onAsignarEECentralizada={(dnis, valor) => {
+                        const nuevoEeMapCentralizada = { ...(historialAbierto.eeMapCentralizada || {}), ...Object.fromEntries(dnis.map((d) => [d, valor])) };
+                        setLiquidaciones((list) => list.map((r) => (r.id === historialAbierto.id ? { ...r, eeMapCentralizada: nuevoEeMapCentralizada } : r)));
+                        setHistorialAbierto((h) => ({ ...h, eeMapCentralizada: nuevoEeMapCentralizada }));
+                      }}
                       onExport={() =>
                         exportLiquidacionExcel(
                           historialAbierto.liq,
                           `liquidacion_${monthLabel(historialAbierto.year, historialAbierto.month).replace(/\s|·/g, "_")}.xlsx`,
                           monthLabel(historialAbierto.year, historialAbierto.month),
-                          historialAbierto.eeMap
+                          historialAbierto.eeMap,
+                          historialAbierto.eeMapCentralizada
                         )
                       }
-                      onPrint={(filtro) => setLiqPrint({ liq: historialAbierto.liq, etiqueta: monthLabel(historialAbierto.year, historialAbierto.month), eeMap: historialAbierto.eeMap, filtro })}
+                      onPrint={(filtro) => setLiqPrint({ liq: historialAbierto.liq, etiqueta: monthLabel(historialAbierto.year, historialAbierto.month), eeMap: historialAbierto.eeMap, eeMapCentralizada: historialAbierto.eeMapCentralizada, filtro })}
                       confirmado
                       fechaConfirmacion={historialAbierto.fechaConfirmacion}
                     />
@@ -4152,6 +4339,7 @@ export default function App({ onLogout, userEmail } = {}) {
           etiqueta={liqPrint.etiqueta}
           nombreCentralizada={catalogos.centralizadaNombre}
           eeMap={liqPrint.eeMap}
+          eeMapCentralizada={liqPrint.eeMapCentralizada}
           filtro={liqPrint.filtro}
           onClose={() => setLiqPrint(null)}
         />
