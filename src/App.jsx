@@ -2428,6 +2428,717 @@ const DEFAULT_CATALOGOS = {
 
 const IAPOS_PCT = 6;
 
+// ---------- Imputaciones: preventivos y devengados ----------
+// Un preventivo (N°, año, monto) cubre a uno o más pasantes. Los devengados se cargan sobre los
+// expedientes (N° de EE) de las liquidaciones confirmadas, y lo que le corresponde a cada pasante
+// se descuenta del preventivo del MISMO AÑO del devengado que se elija para su grupo.
+// Un devengado que es "también preventivo" genera su propio preventivo, que queda consumido (saldo 0).
+const round2 = (n) => Math.round((n || 0) * 100) / 100;
+
+function parseMontoAR(s) {
+  if (typeof s === "number") return s;
+  const t = String(s || "").trim().replace(/\$|\s/g, "");
+  if (!t) return 0;
+  let norm = t;
+  if (t.includes(",")) norm = t.replace(/\./g, "").replace(",", ".");
+  else if (/^\d{1,3}(\.\d{3})+$/.test(t)) norm = t.replace(/\./g, "");
+  const n = Number(norm);
+  return isNaN(n) ? NaN : n;
+}
+
+const numOrden = (s) => {
+  const n = parseInt(String(s || "").replace(/\D/g, ""), 10);
+  return isNaN(n) ? Number.MAX_SAFE_INTEGER : n;
+};
+
+// Arma la lista de expedientes a partir de las liquidaciones confirmadas (mensuales y complementarias),
+// separando los EE de la habilitación pagadora (asignación + IAPOS + aporte si no es centralizada)
+// de los EE de la centralizada (solo aporte univ./inst.).
+function expedientesDeLiquidaciones(liquidaciones) {
+  const map = new Map();
+  (liquidaciones || []).forEach((r) => {
+    (r.liq?.filas || []).forEach((f) => {
+      const dni = f.p?.dni;
+      if (!dni) return;
+      const agregar = (tipoExp, ee, monto) => {
+        if (!ee || !(monto > 0.009)) return;
+        const key = `${r.id}|${tipoExp}|${ee}`;
+        if (!map.has(key)) map.set(key, { key, liqId: r.id, tipoLiq: r.tipo, tipoExp, ee, year: r.year, month: r.month, filas: [], total: 0 });
+        const g = map.get(key);
+        g.filas.push({ dni, nombre: f.p.nombre, monto: round2(monto) });
+        g.total = round2(g.total + monto);
+      };
+      agregar("H", r.eeMap?.[dni], totalACargoHabilitacion(f));
+      if (f.centralizada) agregar("C", r.eeMapCentralizada?.[dni], f.gastoAdmin);
+    });
+  });
+  return Array.from(map.values()).sort((a, b) => b.year - a.year || b.month - a.month || String(a.ee).localeCompare(String(b.ee)));
+}
+
+function consumosPorPreventivo(devengados) {
+  const m = {};
+  (devengados || []).forEach((d) =>
+    (d.imputaciones || []).forEach((i) => {
+      m[i.preventivoId] = round2((m[i.preventivoId] || 0) + i.monto);
+    })
+  );
+  return m;
+}
+
+function pendientesDeExpediente(exp, devengados) {
+  const ya = {};
+  (devengados || [])
+    .filter((d) => d.expKey === exp.key)
+    .forEach((d) => (d.imputaciones || []).forEach((i) => (ya[i.dni] = round2((ya[i.dni] || 0) + i.monto))));
+  const pend = {};
+  exp.filas.forEach((f) => (pend[f.dni] = round2(f.monto - (ya[f.dni] || 0))));
+  return pend;
+}
+
+const IMP_INPUT = { width: "100%", padding: "9px 11px", border: "1px solid #DADCD6", borderRadius: 6, fontSize: 14, fontFamily: "'IBM Plex Sans', sans-serif", color: "#20241F", background: "#fff", boxSizing: "border-box" };
+const IMP_LABEL = { fontSize: 12, fontWeight: 600, color: "#5B6158", marginBottom: 4, display: "block", textTransform: "uppercase", letterSpacing: "0.03em" };
+const IMP_BTN = { padding: "7px 12px", borderRadius: 6, border: "1px solid #DADCD6", background: "#fff", fontSize: 12.5, cursor: "pointer", color: "#1B2A4A" };
+const IMP_BTN_PRIMARY = { padding: "9px 16px", borderRadius: 6, border: "1px solid #1B2A4A", background: "#1B2A4A", color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" };
+
+function ImpModal({ titulo, onClose, children, maxWidth = 640 }) {
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(27,42,74,0.35)", display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "40px 20px", overflowY: "auto", zIndex: 50 }}>
+      <div style={{ background: "#fff", borderRadius: 12, padding: 26, width: "100%", maxWidth, boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+          <div style={{ fontFamily: "'IBM Plex Serif', serif", fontWeight: 700, fontSize: 18, color: "#1B2A4A" }}>{titulo}</div>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "#8A9088" }}>
+            <X size={20} />
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function PreventivoForm({ initial, pasantias, preventivos, consumido, onSave, onCancel }) {
+  const [form, setForm] = useState(() => ({
+    id: initial?.id || uid(),
+    numero: initial?.numero || "",
+    anio: initial?.anio || new Date().getFullYear(),
+    monto: initial?.monto != null ? String(initial.monto).replace(".", ",") : "",
+    observacion: initial?.observacion || "",
+    dnis: initial?.dnis || [],
+  }));
+  const [busca, setBusca] = useState("");
+  const [error, setError] = useState("");
+  const set = (k, v) => {
+    setForm((f) => ({ ...f, [k]: v }));
+    setError("");
+  };
+  const toggle = (dni) => set("dnis", form.dnis.includes(dni) ? form.dnis.filter((d) => d !== dni) : [...form.dnis, dni]);
+  const lista = pasantias
+    .slice()
+    .sort((a, b) => (a.nombre || "").localeCompare(b.nombre || ""))
+    .filter((p) => !busca || [p.nombre, p.dni, p.lugarTrabajo, p.universidad].join(" ").toLowerCase().includes(busca.toLowerCase()));
+
+  const guardar = () => {
+    const monto = parseMontoAR(form.monto);
+    const anio = Number(form.anio);
+    if (!String(form.numero).trim()) return setError("Ingresá el N° de preventivo.");
+    if (!anio || anio < 2000) return setError("Ingresá un año válido.");
+    if (isNaN(monto) || monto <= 0) return setError("Ingresá un monto válido (por ejemplo 1.250.000,50).");
+    if (form.dnis.length === 0) return setError("Elegí al menos un pasante.");
+    if (preventivos.some((p) => p.id !== form.id && String(p.numero).trim() === String(form.numero).trim() && Number(p.anio) === anio))
+      return setError(`Ya existe el preventivo ${form.numero}/${anio}.`);
+    if (consumido > monto + 0.009) return setError(`Este preventivo ya tiene ${moneyFmt(consumido)} devengados: el monto no puede ser menor.`);
+    onSave({ ...initial, id: form.id, numero: String(form.numero).trim(), anio, monto: round2(monto), observacion: form.observacion, dnis: form.dnis });
+  };
+
+  return (
+    <div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 110px 1fr", gap: 12, marginBottom: 14 }}>
+        <div>
+          <label style={IMP_LABEL}>N° preventivo</label>
+          <input style={IMP_INPUT} value={form.numero} onChange={(e) => set("numero", e.target.value)} />
+        </div>
+        <div>
+          <label style={IMP_LABEL}>Año</label>
+          <input style={IMP_INPUT} type="number" value={form.anio} onChange={(e) => set("anio", e.target.value)} />
+        </div>
+        <div>
+          <label style={IMP_LABEL}>Monto</label>
+          <input style={IMP_INPUT} value={form.monto} onChange={(e) => set("monto", e.target.value)} placeholder="12.000.000,00" />
+        </div>
+      </div>
+      <div style={{ marginBottom: 14 }}>
+        <label style={IMP_LABEL}>Observación</label>
+        <input style={IMP_INPUT} value={form.observacion} onChange={(e) => set("observacion", e.target.value)} />
+      </div>
+      <label style={IMP_LABEL}>Pasantes que cubre ({form.dnis.length} elegido{form.dnis.length !== 1 ? "s" : ""})</label>
+      <input style={{ ...IMP_INPUT, marginBottom: 8 }} value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar por nombre, DNI, lugar o universidad…" />
+      <div style={{ border: "1px solid #E7E9E4", borderRadius: 8, maxHeight: 260, overflowY: "auto", marginBottom: 14 }}>
+        {lista.map((p) => (
+          <label key={p.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: "7px 11px", borderBottom: "1px solid #F0F1EE", fontSize: 13, cursor: "pointer", background: form.dnis.includes(p.dni) ? "#F6F7F5" : "#fff" }}>
+            <input type="checkbox" checked={form.dnis.includes(p.dni)} onChange={() => toggle(p.dni)} />
+            <span style={{ flex: 1 }}>{p.nombre}</span>
+            <span style={{ fontSize: 11.5, color: "#8A9088" }}>{p.dni} · {p.universidad}</span>
+          </label>
+        ))}
+        {lista.length === 0 && <div style={{ padding: 14, fontSize: 13, color: "#8A9088" }}>No hay pasantes que coincidan con la búsqueda.</div>}
+      </div>
+      {error && <div style={{ color: "#A6432D", fontSize: 13, marginBottom: 12 }}>{error}</div>}
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <button onClick={onCancel} style={IMP_BTN}>Cancelar</button>
+        <button onClick={guardar} style={IMP_BTN_PRIMARY}>Guardar preventivo</button>
+      </div>
+    </div>
+  );
+}
+
+function DevengadoForm({ exp, devengados, preventivos, consumos, onSave, onCancel }) {
+  const pendientes = useMemo(() => pendientesDeExpediente(exp, devengados), [exp, devengados]);
+  const [numero, setNumero] = useState("");
+  const [anio, setAnio] = useState(exp.year);
+  const [montoTxt, setMontoTxt] = useState("");
+  const [montoTocado, setMontoTocado] = useState(false);
+  const [tambienPrev, setTambienPrev] = useState(false);
+  const [sel, setSel] = useState({}); // groupKey -> { incluir, prevId }
+  const [error, setError] = useState("");
+
+  const saldo = (p) => round2(p.monto - (consumos[p.id] || 0));
+
+  // Agrupa a los pasantes del expediente que tienen algo pendiente según el conjunto
+  // de preventivos del año del devengado que los incluyen.
+  const grupos = useMemo(() => {
+    const m = new Map();
+    exp.filas.forEach((f) => {
+      const pend = pendientes[f.dni] || 0;
+      if (pend <= 0.009) return;
+      const prevs = preventivos
+        .filter((p) => !p.origenDevengadoId && Number(p.anio) === Number(anio) && (p.dnis || []).includes(f.dni))
+        .sort((a, b) => numOrden(a.numero) - numOrden(b.numero));
+      const key = prevs.map((p) => p.id).join(",") || "sin";
+      if (!m.has(key)) m.set(key, { key, prevs, filas: [], pendiente: 0 });
+      const g = m.get(key);
+      g.filas.push({ ...f, pendiente: pend });
+      g.pendiente = round2(g.pendiente + pend);
+    });
+    return Array.from(m.values());
+  }, [exp, pendientes, preventivos, anio]);
+
+  const estado = (g) => {
+    const s = sel[g.key] || {};
+    const incluir = s.incluir !== false;
+    let prevId = s.prevId && g.prevs.some((p) => p.id === s.prevId) ? s.prevId : null;
+    if (!prevId && g.prevs.length) prevId = (g.prevs.find((p) => saldo(p) >= g.pendiente - 0.009) || g.prevs[0]).id;
+    return { incluir, prevId };
+  };
+  const setGrupo = (key, cambios) => {
+    setSel((s) => ({ ...s, [key]: { ...(s[key] || {}), ...cambios } }));
+    setError("");
+  };
+
+  const incluidos = grupos.filter((g) => estado(g).incluir);
+  const totalSeleccionado = round2(incluidos.reduce((a, g) => a + g.pendiente, 0));
+  const monto = montoTocado ? parseMontoAR(montoTxt) : totalSeleccionado;
+
+  // Reparte el monto del devengado entre los pasantes incluidos, en proporción a lo pendiente de cada uno.
+  const reparto = useMemo(() => {
+    const filas = [];
+    incluidos.forEach((g) => g.filas.forEach((f) => filas.push({ ...f, grupo: g.key, prevId: estado(g).prevId })));
+    if (!(monto > 0) || totalSeleccionado <= 0) return [];
+    const factor = monto / totalSeleccionado;
+    let acumulado = 0;
+    return filas.map((f, i) => {
+      const m = i === filas.length - 1 ? round2(monto - acumulado) : round2(f.pendiente * factor);
+      acumulado = round2(acumulado + m);
+      return { ...f, monto: m };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [grupos, sel, monto, totalSeleccionado, consumos]);
+
+  const porGrupo = {};
+  reparto.forEach((r) => (porGrupo[r.grupo] = round2((porGrupo[r.grupo] || 0) + r.monto)));
+  const porPreventivo = {};
+  reparto.forEach((r) => r.prevId && (porPreventivo[r.prevId] = round2((porPreventivo[r.prevId] || 0) + r.monto)));
+
+  const guardar = () => {
+    const anioN = Number(anio);
+    if (!String(numero).trim()) return setError("Ingresá el N° de devengado.");
+    if (!anioN || anioN < 2000) return setError("Ingresá un año válido.");
+    if (incluidos.length === 0) return setError("Tildá al menos un grupo de pasantes.");
+    if (isNaN(monto) || monto <= 0) return setError("Ingresá un monto válido.");
+    if (monto > totalSeleccionado + 0.009) return setError(`El monto supera lo pendiente de devengar de los grupos tildados (${moneyFmt(totalSeleccionado)}).`);
+    const devId = uid();
+    let prevAuto = null;
+    let imputaciones;
+    if (tambienPrev) {
+      prevAuto = {
+        id: uid(),
+        numero: String(numero).trim(),
+        anio: anioN,
+        monto: round2(monto),
+        observacion: `Generado por el devengado ${String(numero).trim()}/${anioN} (Exp. ${exp.ee})`,
+        dnis: Array.from(new Set(reparto.map((r) => r.dni))),
+        origenDevengadoId: devId,
+      };
+      imputaciones = reparto.map((r) => ({ dni: r.dni, nombre: r.nombre, preventivoId: prevAuto.id, monto: r.monto }));
+    } else {
+      if (incluidos.some((g) => g.prevs.length === 0))
+        return setError(`Hay pasantes tildados sin preventivo ${anioN}. Cargá el preventivo, destildá ese grupo, o marcá el devengado como también preventivo.`);
+      for (const [pid, m] of Object.entries(porPreventivo)) {
+        const p = preventivos.find((x) => x.id === pid);
+        if (p && m > saldo(p) + 0.009) return setError(`El preventivo ${p.numero}/${p.anio} no alcanza: tiene saldo ${moneyFmt(saldo(p))} y este devengado le descuenta ${moneyFmt(m)}.`);
+      }
+      imputaciones = reparto.map((r) => ({ dni: r.dni, nombre: r.nombre, preventivoId: r.prevId, monto: r.monto }));
+    }
+    onSave(
+      {
+        id: devId,
+        numero: String(numero).trim(),
+        anio: anioN,
+        monto: round2(monto),
+        fechaCarga: new Date().toISOString(),
+        expKey: exp.key,
+        ee: exp.ee,
+        tipoExp: exp.tipoExp,
+        tipoLiq: exp.tipoLiq,
+        liqYear: exp.year,
+        liqMonth: exp.month,
+        tambienPreventivo: tambienPrev,
+        imputaciones,
+      },
+      prevAuto
+    );
+  };
+
+  return (
+    <div>
+      <div style={{ fontSize: 13, color: "#5B6158", marginBottom: 14 }}>
+        {exp.tipoExp === "C" ? "Centralizada (aporte univ./inst.)" : "Habilitación pagadora"} · {exp.tipoLiq === "mensual" ? "Mensual" : "Complementaria"} {monthLabel(exp.year, exp.month)} · Total expediente {moneyFmt(exp.total)}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 110px 1fr", gap: 12, marginBottom: 14 }}>
+        <div>
+          <label style={IMP_LABEL}>N° devengado</label>
+          <input style={IMP_INPUT} value={numero} onChange={(e) => { setNumero(e.target.value); setError(""); }} />
+        </div>
+        <div>
+          <label style={IMP_LABEL}>Año</label>
+          <input style={IMP_INPUT} type="number" value={anio} onChange={(e) => { setAnio(e.target.value); setSel({}); setError(""); }} />
+        </div>
+        <div>
+          <label style={IMP_LABEL}>Monto</label>
+          <input
+            style={IMP_INPUT}
+            value={montoTocado ? montoTxt : String(totalSeleccionado.toFixed(2)).replace(".", ",")}
+            onChange={(e) => { setMontoTocado(true); setMontoTxt(e.target.value); setError(""); }}
+          />
+          {montoTocado && (
+            <button onClick={() => setMontoTocado(false)} style={{ background: "none", border: "none", padding: "4px 0 0", fontSize: 11.5, color: "#2F5E8A", cursor: "pointer" }}>
+              Usar lo pendiente de los grupos tildados
+            </button>
+          )}
+        </div>
+      </div>
+
+      <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13, marginBottom: 14, cursor: "pointer" }}>
+        <input type="checkbox" checked={tambienPrev} onChange={(e) => { setTambienPrev(e.target.checked); setError(""); }} />
+        Es también preventivo (genera su propio preventivo y no descuenta de otro)
+      </label>
+
+      <label style={IMP_LABEL}>Pasantes del expediente, agrupados por preventivos {anio}</label>
+      {grupos.length === 0 && (
+        <div style={{ padding: 14, fontSize: 13, color: "#8A9088", border: "1px dashed #DADCD6", borderRadius: 8, marginBottom: 14 }}>
+          No queda nada pendiente de devengar en este expediente.
+        </div>
+      )}
+      {grupos.map((g, idx) => {
+        const st = estado(g);
+        return (
+          <div key={g.key} style={{ border: "1px solid #E7E9E4", borderRadius: 8, padding: 12, marginBottom: 10, background: st.incluir ? "#fff" : "#F6F7F5" }}>
+            <label style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}>
+              <span style={{ display: "flex", gap: 8, alignItems: "center", fontWeight: 700, fontSize: 13.5, color: "#1B2A4A" }}>
+                <input type="checkbox" checked={st.incluir} onChange={(e) => setGrupo(g.key, { incluir: e.target.checked })} />
+                Grupo {String.fromCharCode(65 + idx)} · {g.filas.length} pasante{g.filas.length !== 1 ? "s" : ""}
+              </span>
+              <span style={{ fontSize: 13 }}>
+                Pendiente {moneyFmt(g.pendiente)}
+                {st.incluir && porGrupo[g.key] != null && Math.abs(porGrupo[g.key] - g.pendiente) > 0.009 && (
+                  <span style={{ color: "#2F5E8A" }}> · este devengado: {moneyFmt(porGrupo[g.key])}</span>
+                )}
+              </span>
+            </label>
+            <div style={{ fontSize: 12, color: "#5B6158", margin: "4px 0 8px 24px" }}>{g.filas.map((f) => f.nombre).join(", ")}</div>
+            {st.incluir && !tambienPrev && (
+              <div style={{ marginLeft: 24 }}>
+                {g.prevs.length === 0 && (
+                  <div style={{ fontSize: 12.5, color: "#A6432D", background: "#F6E9E6", borderRadius: 6, padding: "7px 10px" }}>
+                    Sin preventivo {anio} para estos pasantes.
+                  </div>
+                )}
+                {g.prevs.map((p) => {
+                  const s = saldo(p);
+                  const necesita = st.prevId === p.id ? porPreventivo[p.id] || 0 : porGrupo[g.key] || 0;
+                  const noAlcanza = necesita > s + 0.009;
+                  return (
+                    <label key={p.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13, padding: "4px 0", cursor: "pointer" }}>
+                      <span>
+                        <input type="radio" name={`grupo-${g.key}`} checked={st.prevId === p.id} onChange={() => setGrupo(g.key, { prevId: p.id })} style={{ marginRight: 8 }} />
+                        Prev. {p.numero}/{p.anio}
+                      </span>
+                      <span style={{ color: noAlcanza ? "#B8862F" : "#5B6158" }}>saldo {moneyFmt(s)}{noAlcanza ? " · no alcanza" : ""}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {error && <div style={{ color: "#A6432D", fontSize: 13, margin: "4px 0 12px" }}>{error}</div>}
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 6 }}>
+        <button onClick={onCancel} style={IMP_BTN}>Cancelar</button>
+        <button onClick={guardar} style={IMP_BTN_PRIMARY}>Agregar devengado</button>
+      </div>
+    </div>
+  );
+}
+
+function ImputacionesView({ pasantias, liquidaciones, preventivos, setPreventivos, devengados, setDevengados, setConfirmAction, ejecutarProtegido }) {
+  const [sub, setSub] = useState("preventivos");
+  const [anio, setAnio] = useState(new Date().getFullYear());
+  const [agrupar, setAgrupar] = useState(false);
+  const [prevModal, setPrevModal] = useState(null); // { data }
+  const [abierto, setAbierto] = useState(null);
+  const [devModal, setDevModal] = useState(null); // exp
+  const [busca, setBusca] = useState("");
+  const [soloPendientes, setSoloPendientes] = useState(true);
+  const [aviso, setAviso] = useState("");
+
+  const nombrePorDni = useMemo(() => Object.fromEntries(pasantias.map((p) => [p.dni, p.nombre])), [pasantias]);
+  const nombre = (dni) => nombrePorDni[dni] || dni;
+  const consumos = useMemo(() => consumosPorPreventivo(devengados), [devengados]);
+  const expedientes = useMemo(() => expedientesDeLiquidaciones(liquidaciones), [liquidaciones]);
+  const avisar = (t) => {
+    setAviso(t);
+    setTimeout(() => setAviso(""), 6000);
+  };
+
+  const aniosDisponibles = Array.from(
+    new Set([new Date().getFullYear(), ...preventivos.map((p) => Number(p.anio)), ...devengados.map((d) => Number(d.anio)), ...expedientes.map((e) => e.year)])
+  ).sort((a, b) => b - a);
+
+  const q = busca.trim().toLowerCase();
+  const prevsAnio = preventivos
+    .filter((p) => Number(p.anio) === Number(anio))
+    .filter((p) => !q || [p.numero, p.observacion, ...(p.dnis || []).map(nombre)].join(" ").toLowerCase().includes(q))
+    .sort((a, b) => numOrden(a.numero) - numOrden(b.numero));
+
+  const guardarPreventivo = (p) => {
+    setPreventivos((list) => (list.some((x) => x.id === p.id) ? list.map((x) => (x.id === p.id ? p : x)) : [...list, p]));
+    setPrevModal(null);
+  };
+  const eliminarPreventivo = (p) => {
+    if ((consumos[p.id] || 0) > 0.009) return avisar(`No se puede eliminar el preventivo ${p.numero}/${p.anio}: ya tiene devengados descontados. Eliminá primero esos devengados.`);
+    ejecutarProtegido("liquidacion", () =>
+      setConfirmAction({ message: `¿Eliminar el preventivo ${p.numero}/${p.anio}?`, onConfirm: () => setPreventivos((list) => list.filter((x) => x.id !== p.id)) })
+    );
+  };
+  const guardarDevengado = (dev, prevAuto) => {
+    if (prevAuto) setPreventivos((list) => [...list, prevAuto]);
+    setDevengados((list) => [...list, dev]);
+    setDevModal(null);
+  };
+  const eliminarDevengado = (d) =>
+    ejecutarProtegido("liquidacion", () =>
+      setConfirmAction({
+        message: `¿Eliminar el devengado ${d.numero}/${d.anio} del expediente ${d.ee}? Los montos vuelven al saldo de sus preventivos.${d.tambienPreventivo ? " También se elimina el preventivo que generó." : ""}`,
+        onConfirm: () => {
+          setDevengados((list) => list.filter((x) => x.id !== d.id));
+          setPreventivos((list) => list.filter((x) => x.origenDevengadoId !== d.id));
+        },
+      })
+    );
+
+  const movimientos = (p) =>
+    devengados
+      .map((d) => ({ d, monto: round2((d.imputaciones || []).filter((i) => i.preventivoId === p.id).reduce((a, i) => a + i.monto, 0)), nombres: (d.imputaciones || []).filter((i) => i.preventivoId === p.id).map((i) => i.nombre || nombre(i.dni)) }))
+      .filter((x) => x.monto > 0.009)
+      .sort((a, b) => a.d.liqYear - b.d.liqYear || a.d.liqMonth - b.d.liqMonth || a.d.fechaCarga.localeCompare(b.d.fechaCarga));
+
+  const TarjetaPreventivo = ({ p }) => {
+    const cons = consumos[p.id] || 0;
+    const saldo = round2(p.monto - cons);
+    const pct = p.monto > 0 ? Math.min(100, (cons / p.monto) * 100) : 0;
+    const badge = p.origenDevengadoId
+      ? { t: "Devengado-preventivo", bg: "#EFEDF5", c: "#6B5B95" }
+      : saldo <= 0.009
+      ? { t: "Agotado", bg: "#F0F1EE", c: "#5B6158" }
+      : saldo < p.monto * 0.1
+      ? { t: "Saldo bajo", bg: "#FBF3E4", c: "#B8862F" }
+      : { t: "Con saldo", bg: "#EAF3EF", c: "#2F6E5E" };
+    const nombres = (p.dnis || []).map(nombre);
+    const estaAbierto = abierto === p.id;
+    return (
+      <div style={{ background: "#fff", border: "1px solid #E7E9E4", borderRadius: 10, padding: "13px 16px", marginBottom: 8 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontWeight: 700, fontSize: 14.5, color: "#1B2A4A" }}>Preventivo {p.numero}/{p.anio}</span>
+              <span style={{ padding: "2px 9px", borderRadius: 20, background: badge.bg, color: badge.c, fontSize: 11.5, fontWeight: 600 }}>{badge.t}</span>
+            </div>
+            <div style={{ fontSize: 12, color: "#8A9088", marginTop: 3 }}>
+              {nombres.length} pasante{nombres.length !== 1 ? "s" : ""} · {nombres.slice(0, 5).join(", ")}{nombres.length > 5 ? ` y ${nombres.length - 5} más` : ""}
+            </div>
+            {p.observacion && <div style={{ fontSize: 12, color: "#5B6158", marginTop: 2 }}>{p.observacion}</div>}
+          </div>
+          <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+            <button onClick={() => setAbierto(estaAbierto ? null : p.id)} style={IMP_BTN}>{estaAbierto ? "Ocultar" : "Ver detalle"}</button>
+            {!p.origenDevengadoId && (
+              <>
+                <button onClick={() => setPrevModal({ data: p })} style={IMP_BTN} title="Editar"><Edit2 size={13} /></button>
+                <button onClick={() => eliminarPreventivo(p)} style={{ ...IMP_BTN, color: "#A6432D" }} title="Eliminar"><Trash2 size={13} /></button>
+              </>
+            )}
+          </div>
+        </div>
+        <div style={{ height: 7, background: "#F0F1EE", borderRadius: 4, overflow: "hidden", margin: "10px 0 6px" }}>
+          <div style={{ width: `${pct}%`, height: "100%", background: badge.c }} />
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, flexWrap: "wrap", gap: 10 }}>
+          <span style={{ color: "#5B6158" }}>Monto {moneyFmt(p.monto)}</span>
+          <span style={{ color: "#5B6158" }}>Devengado {moneyFmt(cons)}</span>
+          <span style={{ color: "#1B2A4A" }}>Saldo <strong>{moneyFmt(saldo)}</strong></span>
+        </div>
+        {estaAbierto && (
+          <div style={{ marginTop: 12, borderTop: "1px solid #E7E9E4", paddingTop: 8 }}>
+            {movimientos(p).length === 0 && <div style={{ fontSize: 12.5, color: "#8A9088", padding: "6px 0" }}>Todavía no tiene devengados descontados.</div>}
+            {movimientos(p).map(({ d, monto, nombres: ns }) => (
+              <div key={d.id} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "7px 0", borderBottom: "1px solid #F0F1EE", fontSize: 12.5 }}>
+                <div>
+                  <div>
+                    Dev. {d.numero}/{d.anio} · Exp. {d.ee} · <span style={{ textTransform: "capitalize" }}>{monthLabel(d.liqYear, d.liqMonth)}</span>
+                    {d.tipoLiq === "complementaria" ? " (compl.)" : ""}
+                    {d.tipoExp === "C" ? " · centralizada" : ""}
+                  </div>
+                  <div style={{ fontSize: 11.5, color: "#8A9088" }}>{ns.join(", ")}</div>
+                </div>
+                <span style={{ color: "#A6432D", whiteSpace: "nowrap" }}>− {moneyFmt(monto)}</span>
+              </div>
+            ))}
+            <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 13, paddingTop: 8 }}>
+              <span>Saldo</span>
+              <span>{moneyFmt(saldo)}</span>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // Grupos de preventivos que cubren exactamente a los mismos pasantes
+  const gruposPorPasantes = (() => {
+    const m = new Map();
+    prevsAnio.forEach((p) => {
+      const key = (p.dnis || []).slice().sort().join(",");
+      if (!m.has(key)) m.set(key, { key, dnis: p.dnis || [], prevs: [] });
+      m.get(key).prevs.push(p);
+    });
+    return Array.from(m.values()).sort((a, b) => b.dnis.length - a.dnis.length);
+  })();
+
+  const totalesAnio = prevsAnio.reduce(
+    (acc, p) => ({ monto: acc.monto + p.monto, cons: acc.cons + (consumos[p.id] || 0) }),
+    { monto: 0, cons: 0 }
+  );
+
+  const expsFiltrados = expedientes
+    .filter((e) => e.year === Number(anio))
+    .map((e) => {
+      const devs = devengados.filter((d) => d.expKey === e.key);
+      const devengado = round2(devs.reduce((a, d) => a + d.monto, 0));
+      return { ...e, devs, devengado, pendiente: round2(e.total - devengado) };
+    })
+    .filter((e) => !soloPendientes || e.pendiente > 0.009)
+    .filter((e) => !q || [e.ee, ...e.filas.map((f) => f.nombre), ...e.devs.map((d) => d.numero)].join(" ").toLowerCase().includes(q));
+
+  const nombrePrev = (id) => {
+    const p = preventivos.find((x) => x.id === id);
+    return p ? `Prev. ${p.numero}/${p.anio}` : "Prev. eliminado";
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 4, marginBottom: 18, flexWrap: "wrap" }}>
+        {[
+          ["preventivos", "Preventivos"],
+          ["expedientes", "Expedientes y devengados"],
+        ].map(([k, l]) => (
+          <button
+            key={k}
+            onClick={() => setSub(k)}
+            style={{ padding: "9px 16px", background: sub === k ? "#1B2A4A" : "#fff", color: sub === k ? "#fff" : "#1B2A4A", border: "1px solid " + (sub === k ? "#1B2A4A" : "#DADCD6"), borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: "pointer" }}
+          >
+            {l}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 16, flexWrap: "wrap" }}>
+        <select value={anio} onChange={(e) => setAnio(Number(e.target.value))} style={{ ...IMP_INPUT, width: 110 }}>
+          {aniosDisponibles.map((a) => (
+            <option key={a} value={a}>{a}</option>
+          ))}
+        </select>
+        <input
+          style={{ ...IMP_INPUT, flex: 1, minWidth: 220 }}
+          value={busca}
+          onChange={(e) => setBusca(e.target.value)}
+          placeholder={sub === "preventivos" ? "Buscar por N° de preventivo o pasante…" : "Buscar por N° de expediente, pasante o devengado…"}
+        />
+        {sub === "preventivos" ? (
+          <>
+            <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13, cursor: "pointer" }}>
+              <input type="checkbox" checked={agrupar} onChange={(e) => setAgrupar(e.target.checked)} /> Agrupar por pasantes
+            </label>
+            <button onClick={() => setPrevModal({ data: { anio } })} style={{ ...IMP_BTN_PRIMARY, display: "flex", alignItems: "center", gap: 6 }}>
+              <Plus size={14} /> Nuevo preventivo
+            </button>
+          </>
+        ) : (
+          <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13, cursor: "pointer" }}>
+            <input type="checkbox" checked={soloPendientes} onChange={(e) => setSoloPendientes(e.target.checked)} /> Solo con saldo pendiente de devengar
+          </label>
+        )}
+      </div>
+
+      {aviso && <div style={{ background: "#FBF3E4", color: "#8A6420", border: "1px solid #F0DDB4", borderRadius: 8, padding: "10px 14px", fontSize: 13, marginBottom: 14 }}>{aviso}</div>}
+
+      {sub === "preventivos" && (
+        <div>
+          {prevsAnio.length > 0 && (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 18 }}>
+              {[
+                ["Total preventivos " + anio, totalesAnio.monto],
+                ["Devengado", totalesAnio.cons],
+                ["Saldo", totalesAnio.monto - totalesAnio.cons],
+              ].map(([t, v]) => (
+                <div key={t} style={{ background: "#fff", border: "1px solid #E7E9E4", borderRadius: 10, padding: "12px 16px" }}>
+                  <div style={{ fontSize: 12, color: "#8A9088" }}>{t}</div>
+                  <div style={{ fontSize: 19, fontWeight: 700, color: "#1B2A4A", fontFamily: "'IBM Plex Serif', serif" }}>{moneyFmt(v)}</div>
+                </div>
+              ))}
+            </div>
+          )}
+          {prevsAnio.length === 0 && (
+            <div style={{ background: "#fff", border: "1px dashed #DADCD6", borderRadius: 10, padding: 30, textAlign: "center", color: "#8A9088" }}>
+              No hay preventivos {anio}{q ? " que coincidan con la búsqueda" : ""}. Cargalos con "Nuevo preventivo".
+            </div>
+          )}
+          {!agrupar && prevsAnio.map((p) => <TarjetaPreventivo key={p.id} p={p} />)}
+          {agrupar &&
+            gruposPorPasantes.map((g) => {
+              const monto = g.prevs.reduce((a, p) => a + p.monto, 0);
+              const cons = g.prevs.reduce((a, p) => a + (consumos[p.id] || 0), 0);
+              return (
+                <div key={g.key} style={{ background: "#F6F7F5", border: "1px solid #E7E9E4", borderRadius: 10, padding: 14, marginBottom: 14 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: "#1B2A4A" }}>
+                    {g.prevs.length} preventivo{g.prevs.length !== 1 ? "s" : ""} para {g.dnis.length} pasante{g.dnis.length !== 1 ? "s" : ""}
+                  </div>
+                  <div style={{ fontSize: 12, color: "#5B6158", margin: "3px 0 6px" }}>{g.dnis.map(nombre).join(", ")}</div>
+                  <div style={{ fontSize: 12.5, marginBottom: 10 }}>
+                    Monto {moneyFmt(monto)} · Devengado {moneyFmt(cons)} · Saldo del grupo <strong>{moneyFmt(monto - cons)}</strong>
+                  </div>
+                  {g.prevs.map((p) => <TarjetaPreventivo key={p.id} p={p} />)}
+                </div>
+              );
+            })}
+        </div>
+      )}
+
+      {sub === "expedientes" && (
+        <div>
+          {expsFiltrados.length === 0 && (
+            <div style={{ background: "#fff", border: "1px dashed #DADCD6", borderRadius: 10, padding: 30, textAlign: "center", color: "#8A9088" }}>
+              No hay expedientes {soloPendientes ? "con saldo pendiente " : ""}en {anio}. Acá aparecen los N° de EE asignados en las liquidaciones confirmadas (Liquidación → Historial).
+            </div>
+          )}
+          {expsFiltrados.map((e) => (
+            <div key={e.key} style={{ background: "#fff", border: "1px solid #E7E9E4", borderRadius: 10, marginBottom: 12, overflow: "hidden" }}>
+              <div style={{ padding: "10px 16px", background: "#F6F7F5", borderBottom: "1px solid #E7E9E4", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: "#1B2A4A" }}>
+                    Expediente {e.ee} · {e.filas.length} pasante{e.filas.length !== 1 ? "s" : ""}
+                  </div>
+                  <div style={{ fontSize: 12, color: "#8A9088", marginTop: 2 }}>
+                    {e.tipoExp === "C" ? "Centralizada (aporte univ./inst.)" : "Habilitación pagadora"} · {e.tipoLiq === "mensual" ? "Mensual" : "Complementaria"} <span style={{ textTransform: "capitalize" }}>{monthLabel(e.year, e.month)}</span>
+                  </div>
+                </div>
+                {e.pendiente > 0.009 && (
+                  <button onClick={() => setDevModal(e)} style={{ ...IMP_BTN_PRIMARY, display: "flex", alignItems: "center", gap: 6 }}>
+                    <Plus size={14} /> Cargar devengado
+                  </button>
+                )}
+              </div>
+              <div style={{ padding: "10px 16px" }}>
+                <div style={{ display: "flex", gap: 20, fontSize: 12.5, flexWrap: "wrap", marginBottom: e.devs.length ? 10 : 0 }}>
+                  <span>Total expediente: <strong>{moneyFmt(e.total)}</strong></span>
+                  <span>Devengado: <strong>{moneyFmt(e.devengado)}</strong></span>
+                  <span style={{ color: e.pendiente > 0.009 ? "#B8862F" : "#2F6E5E" }}>
+                    {e.pendiente > 0.009 ? <>Pendiente de devengar: <strong>{moneyFmt(e.pendiente)}</strong></> : "Devengado completo"}
+                  </span>
+                </div>
+                {e.devs.map((d) => {
+                  const porPrev = {};
+                  (d.imputaciones || []).forEach((i) => {
+                    if (!porPrev[i.preventivoId]) porPrev[i.preventivoId] = { monto: 0, nombres: [] };
+                    porPrev[i.preventivoId].monto = round2(porPrev[i.preventivoId].monto + i.monto);
+                    porPrev[i.preventivoId].nombres.push(i.nombre || nombre(i.dni));
+                  });
+                  return (
+                    <div key={d.id} style={{ border: "1px solid #F0F1EE", borderRadius: 8, padding: "8px 12px", marginBottom: 6 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                        <span style={{ fontWeight: 700, fontSize: 13 }}>
+                          Devengado {d.numero}/{d.anio}
+                          {d.tambienPreventivo && <span style={{ marginLeft: 8, padding: "1px 8px", borderRadius: 20, background: "#EFEDF5", color: "#6B5B95", fontSize: 11, fontWeight: 600 }}>también preventivo</span>}
+                        </span>
+                        <span style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13 }}>
+                          <strong>{moneyFmt(d.monto)}</strong>
+                          <button onClick={() => eliminarDevengado(d)} style={{ ...IMP_BTN, padding: "4px 8px", color: "#A6432D" }} title="Eliminar devengado"><Trash2 size={12} /></button>
+                        </span>
+                      </div>
+                      {Object.entries(porPrev).map(([pid, x]) => (
+                        <div key={pid} style={{ fontSize: 12, color: "#5B6158", marginTop: 3 }}>
+                          {nombrePrev(pid)} · {moneyFmt(x.monto)} · {x.nombres.join(", ")}
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {prevModal && (
+        <ImpModal titulo={prevModal.data?.id ? `Editar preventivo ${prevModal.data.numero}/${prevModal.data.anio}` : "Nuevo preventivo"} onClose={() => setPrevModal(null)}>
+          <PreventivoForm
+            initial={prevModal.data}
+            pasantias={pasantias}
+            preventivos={preventivos}
+            consumido={prevModal.data?.id ? consumos[prevModal.data.id] || 0 : 0}
+            onSave={guardarPreventivo}
+            onCancel={() => setPrevModal(null)}
+          />
+        </ImpModal>
+      )}
+      {devModal && (
+        <ImpModal titulo={`Cargar devengado · Expediente ${devModal.ee}`} onClose={() => setDevModal(null)} maxWidth={700}>
+          <DevengadoForm exp={devModal} devengados={devengados} preventivos={preventivos} consumos={consumos} onSave={guardarDevengado} onCancel={() => setDevModal(null)} />
+        </ImpModal>
+      )}
+    </div>
+  );
+}
+
 export default function App({ onLogout, userEmail } = {}) {
   const [pasantias, setPasantias] = useState([]);
   const [catalogos, setCatalogos] = useState(DEFAULT_CATALOGOS);
@@ -2472,6 +3183,8 @@ export default function App({ onLogout, userEmail } = {}) {
   const [eeMap, setEeMap] = useState({});
   const [eeMapCentralizada, setEeMapCentralizada] = useState({});
   const [liquidaciones, setLiquidaciones] = useState([]);
+  const [preventivos, setPreventivos] = useState([]);
+  const [devengados, setDevengados] = useState([]);
   const [liqPrint, setLiqPrint] = useState(null);
   const [historialAbierto, setHistorialAbierto] = useState(null);
   const [presupuestoModal, setPresupuestoModal] = useState(null);
@@ -2505,6 +3218,14 @@ export default function App({ onLogout, userEmail } = {}) {
       try {
         const resLiq = await window.storage.get("liquidaciones-v1", true);
         if (resLiq?.value) setLiquidaciones(JSON.parse(resLiq.value));
+      } catch (e) {}
+      try {
+        const resPrev = await window.storage.get("preventivos-v1", true);
+        if (resPrev?.value) setPreventivos(JSON.parse(resPrev.value));
+      } catch (e) {}
+      try {
+        const resDev = await window.storage.get("devengados-v1", true);
+        if (resDev?.value) setDevengados(JSON.parse(resDev.value));
       } catch (e) {}
       try {
         const resNotif = await window.storage.get("notificaciones-v1", true);
@@ -2549,6 +3270,16 @@ export default function App({ onLogout, userEmail } = {}) {
     window.storage.set("notificaciones-v1", JSON.stringify(notificaciones), true).catch(() => {});
   }, [notificaciones, loaded]);
 
+  useEffect(() => {
+    if (!loaded) return;
+    window.storage.set("preventivos-v1", JSON.stringify(preventivos), true).catch(() => {});
+  }, [preventivos, loaded]);
+
+  useEffect(() => {
+    if (!loaded) return;
+    window.storage.set("devengados-v1", JSON.stringify(devengados), true).catch(() => {});
+  }, [devengados, loaded]);
+
   const addCatalogo = (key, value) => {
     setCatalogos((c) => (c[key].includes(value) ? c : { ...c, [key]: [...c[key], value] }));
   };
@@ -2590,7 +3321,7 @@ export default function App({ onLogout, userEmail } = {}) {
   const [restoreMsg, setRestoreMsg] = useState("");
 
   const descargarBackup = () => {
-    const payload = { version: 4, exportadoEl: new Date().toISOString(), pasantias, catalogos, tramites, eeMap, eeMapCentralizada, liquidaciones, notificaciones };
+    const payload = { version: 5, exportadoEl: new Date().toISOString(), pasantias, catalogos, tramites, eeMap, eeMapCentralizada, liquidaciones, notificaciones, preventivos, devengados };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -2638,6 +3369,9 @@ export default function App({ onLogout, userEmail } = {}) {
             if (data.eeMapCentralizada && typeof data.eeMapCentralizada === "object") setEeMapCentralizada(data.eeMapCentralizada);
             if (Array.isArray(data.liquidaciones)) setLiquidaciones(data.liquidaciones);
             if (data.notificaciones && typeof data.notificaciones === "object") setNotificaciones(data.notificaciones);
+            // Backups anteriores a la versión 5 no traen imputaciones: en ese caso quedan vacías.
+            setPreventivos(Array.isArray(data.preventivos) ? data.preventivos : []);
+            setDevengados(Array.isArray(data.devengados) ? data.devengados : []);
             setRestoreMsg(`Restaurado: ${okPasantias} pasantías.`);
             setTimeout(() => setRestoreMsg(""), 4000);
           },
@@ -2806,6 +3540,7 @@ export default function App({ onLogout, userEmail } = {}) {
     { id: "novedades", label: "Novedades" },
     { id: "reportes", label: "Reportes" },
     { id: "liquidacion", label: "Liquidación" },
+    { id: "imputaciones", label: "Imputaciones" },
     { id: "catalogos", label: "Catálogos" },
   ];
 
@@ -3663,6 +4398,20 @@ export default function App({ onLogout, userEmail } = {}) {
               </div>
             )}
           </div>
+        )}
+
+        {/* -------- IMPUTACIONES (preventivos y devengados) -------- */}
+        {tab === "imputaciones" && (
+          <ImputacionesView
+            pasantias={pasantias}
+            liquidaciones={liquidaciones}
+            preventivos={preventivos}
+            setPreventivos={setPreventivos}
+            devengados={devengados}
+            setDevengados={setDevengados}
+            setConfirmAction={setConfirmAction}
+            ejecutarProtegido={ejecutarProtegido}
+          />
         )}
 
         {/* -------- CATÁLOGOS -------- */}
